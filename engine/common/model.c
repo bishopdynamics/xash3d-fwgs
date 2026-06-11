@@ -32,6 +32,8 @@ CVAR_DEFINE( mod_studiocache, "r_studiocache", "1", FCVAR_ARCHIVE, "enables stud
 CVAR_DEFINE_AUTO( r_wadtextures, "0", FCVAR_LATCH, "completely ignore textures in the bsp-file if enabled" );
 CVAR_DEFINE_AUTO( r_showhull, "0", 0, "draw collision hulls 1-3" );
 CVAR_DEFINE_AUTO( r_allow_wad3_luma, "0", FCVAR_LATCH|FCVAR_ARCHIVE, "allow usage of luma textures in wad3 (tilde textures)" );
+static CVAR_DEFINE_AUTO( mod_world_residency, "1", 0, "keep parsed world models resident across changelevels for instant revisits" );
+static void Mod_FreeCachedWorlds( void );
 
 /*
 ===============================================================================
@@ -177,6 +179,7 @@ void Mod_Init( void )
 {
 	com_studiocache = Mem_AllocPool( "Studio Cache" );
 	Cvar_RegisterVariable( &mod_studiocache );
+	Cvar_RegisterVariable( &mod_world_residency );
 	Cvar_RegisterVariable( &r_wadtextures );
 	Cvar_RegisterVariable( &r_showhull );
 	Cvar_RegisterVariable( &r_allow_wad3_luma );
@@ -198,6 +201,8 @@ void Mod_FreeAll( void )
 #if !XASH_DEDICATED
 	Mod_ReleaseHullPolygons();
 #endif
+	Mod_FreeCachedWorlds();
+
 	for( int i = 0; i < mod_numknown; i++ )
 		Mod_FreeModel( &mod_known[i] );
 	mod_numknown = 0;
@@ -210,6 +215,10 @@ Mod_ClearUserData
 */
 void Mod_ClearUserData( void )
 {
+	// render data of cached worlds can't be recreated later (no source buffer);
+	// drop the cache so a renderer restart can't leave stale texture handles
+	Mod_FreeCachedWorlds();
+
 	for( int i = 0; i < mod_numknown; i++ )
 		Mod_FreeUserData( &mod_known[i] );
 }
@@ -445,6 +454,180 @@ model_t *Mod_ForName( const char *name, qboolean crash, qboolean trackCRC )
 }
 
 /*
+==============================================================================
+WORLD RESIDENCY CACHE (xash3d-streaming, M3)
+
+Parsed world models (slot #0 + their "*N" submodel entries + the derived
+world_static_t globals) are moved to a side-cache on changelevel instead of
+being freed. Revisiting a cached map skips file load, BSP parsing and texture
+upload entirely. The cache owns the worlds' memory pools; the active world in
+slot #0 borrows its pool from the cache. mod_world_residency 0 restores the
+legacy free-on-changelevel behavior.
+==============================================================================
+*/
+typedef struct worldcache_s
+{
+	struct worldcache_s	*next;
+	char		name[MAX_QPATH];
+	model_t		world;		// snapshot of mod_known[0]
+	model_t		*submodels;	// snapshots of this world's "*N" entries
+	int		numsubmodels;
+	world_static_t	worldstate;	// snapshot of the `world` global after load
+} worldcache_t;
+
+static worldcache_t	*wc_list;
+
+static worldcache_t *Mod_FindCachedWorld( const char *name )
+{
+	worldcache_t	*wc;
+
+	for( wc = wc_list; wc != NULL; wc = wc->next )
+	{
+		if( !Q_stricmp( wc->name, name ))
+			return wc;
+	}
+	return NULL;
+}
+
+/*
+==================
+Mod_CacheCurrentWorld
+
+snapshot slot #0 + submodels + world globals into the cache and clear the
+slots WITHOUT freeing the world's pool (the cache owns it from now on).
+returns false if there is no world to cache.
+==================
+*/
+static qboolean Mod_CacheCurrentWorld( void )
+{
+	model_t		*w = mod_known;
+	worldcache_t	*wc;
+	int		i;
+
+	if( !w->name[0] || w->type != mod_brush || !w->mempool )
+		return false;
+
+	if(( wc = Mod_FindCachedWorld( w->name )) == NULL )
+	{
+		wc = Mem_Calloc( host.mempool, sizeof( *wc ));
+		Q_strncpy( wc->name, w->name, sizeof( wc->name ));
+		wc->next = wc_list;
+		wc_list = wc;
+	}
+	else if( wc->submodels )
+	{
+		Mem_Free( wc->submodels );
+		wc->submodels = NULL;
+	}
+
+	wc->world = *w;
+	wc->worldstate = world;
+	wc->worldstate.loading = false;
+
+	// debug hull polys are released on changelevel; don't carry stale pointers
+	wc->worldstate.hull_models = NULL;
+	wc->worldstate.num_hull_models = 0;
+
+	wc->numsubmodels = 0;
+	if( w->numsubmodels > 1 )
+		wc->submodels = Mem_Calloc( host.mempool, sizeof( model_t ) * ( w->numsubmodels - 1 ));
+
+	for( i = 1; i < mod_numknown; i++ )
+	{
+		if( mod_known[i].needload == NL_UNREFERENCED || mod_known[i].name[0] != '*' )
+			continue;
+
+		if( wc->submodels && wc->numsubmodels < w->numsubmodels - 1 )
+			wc->submodels[wc->numsubmodels++] = mod_known[i];
+
+		memset( &mod_known[i], 0, sizeof( model_t )); // submodels never own a pool
+	}
+
+	memset( w, 0, sizeof( model_t )); // pool now owned by the cache entry
+	world.version = 0;
+	world.shadowdata = NULL;
+	world.deluxedata = NULL;
+	world.hull_models = NULL;
+	world.compressed_phs = NULL;
+	world.phsofs = NULL;
+
+	return true;
+}
+
+/*
+==================
+Mod_RestoreCachedWorld
+
+put a cached world back into slot #0, recreate its submodel entries and
+restore the world globals. skips file load/parse/texture upload entirely.
+==================
+*/
+static qboolean Mod_RestoreCachedWorld( const char *name )
+{
+	worldcache_t	*wc = Mod_FindCachedWorld( name );
+
+	if( wc == NULL )
+		return false;
+
+	*mod_known = wc->world;
+	mod_known->needload = NL_PRESENT;
+	world = wc->worldstate;
+
+	for( int i = 0; i < wc->numsubmodels; i++ )
+	{
+		model_t	*sub = Mod_FindName( wc->submodels[i].name, true );
+
+		*sub = wc->submodels[i];
+		sub->needload = NL_PRESENT;
+	}
+
+	Con_Reportf( "%s: restored %s from residency cache\n", __func__, name );
+	return true;
+}
+
+/*
+==================
+Mod_FreeCachedWorlds
+
+full purge (server shutdown, vid restart). frees the cached pools; if slot #0
+currently borrows a cached pool, its slots are cleared here so the caller's
+Mod_FreeModel does not double-free.
+==================
+*/
+static void Mod_FreeCachedWorlds( void )
+{
+	worldcache_t	*wc, *next;
+
+	for( wc = wc_list; wc != NULL; wc = next )
+	{
+		next = wc->next;
+
+		if( mod_known->mempool == wc->world.mempool && mod_known->name[0] )
+		{
+			// active world borrows this pool: clear its slots, we own the free
+			for( int i = 1; i < mod_numknown; i++ )
+			{
+				if( mod_known[i].name[0] == '*' )
+					memset( &mod_known[i], 0, sizeof( model_t ));
+			}
+			memset( mod_known, 0, sizeof( model_t ));
+			world.version = 0;
+			world.shadowdata = NULL;
+			world.deluxedata = NULL;
+			world.hull_models = NULL;
+			world.compressed_phs = NULL;
+			world.phsofs = NULL;
+		}
+
+		Mem_FreePool( &wc->world.mempool );
+		if( wc->submodels )
+			Mem_Free( wc->submodels );
+		Mem_Free( wc );
+	}
+	wc_list = NULL;
+}
+
+/*
 ==================
 Mod_PurgeStudioCache
 
@@ -458,8 +641,9 @@ static void Mod_PurgeStudioCache( void )
 #if !XASH_DEDICATED
 	Mod_ReleaseHullPolygons();
 #endif
-	// release previois map
-	Mod_FreeModel( mod_known );	// world is stuck on slot #0 always
+	// release previois map (or move it into the residency cache)
+	if( !mod_world_residency.value || !Mod_CacheCurrentWorld( ))
+		Mod_FreeModel( mod_known );	// world is stuck on slot #0 always
 
 	// we should release all the world submodels
 	// and clear studio sequences
@@ -494,8 +678,12 @@ model_t *Mod_LoadWorld( const char *name, qboolean preload )
 	if( !Q_stricmp( mod_known->name, name ))
 		return mod_known;
 
-	// free sequence files on studiomodels
+	// free sequence files on studiomodels (and cache the current world)
 	Mod_PurgeStudioCache();
+
+	// revisited map: restore from the residency cache, skipping the load
+	if( mod_world_residency.value && Mod_RestoreCachedWorld( name ))
+		return mod_known;
 
 	// load the newmap
 	world.loading = true;
