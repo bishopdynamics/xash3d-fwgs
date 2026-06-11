@@ -1000,8 +1000,10 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 	// did we drop some frames?
 	if( i > cl.last_incoming_sequence + 1 )
 	{
-		// mark as dropped
-		for( j = cl.last_incoming_sequence + 1; j < i; j++ )
+		// mark as dropped. only the last CL_UPDATE_MASK frames exist in the
+		// window — iterating a larger gap (e.g. the sequence jump across a
+		// changelevel) would just rewrite the same slots over and over
+		for( j = Q_max( cl.last_incoming_sequence + 1, i - CL_UPDATE_MASK ); j < i; j++ )
 		{
 			if( cl.frames[j & CL_UPDATE_MASK].receivedtime >= 0.0 )
 			{
