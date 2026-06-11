@@ -1686,6 +1686,8 @@ void CL_RegisterResources( sizebuf_t *msg, connprotocol_t proto )
 
 		if( !cl.video_prepped && !cl.audio_prepped )
 		{
+			double prof_prep = Sys_DoubleTime(), prof_newmap;
+
 			Con_Printf( "Setting up renderer...\n" );
 
 			// load tempent sprites (glowshell, muzzleflashes etc)
@@ -1702,7 +1704,9 @@ void CL_RegisterResources( sizebuf_t *msg, connprotocol_t proto )
 			R_SetupSky( clgame.movevars.skyName );
 
 			// tell rendering system we have a new set of models.
+			prof_newmap = Sys_DoubleTime();
 			ref.dllFuncs.R_NewMap ();
+			Con_Reportf( "^3[streamprof]^7 R_NewMap: %.2f ms\n", ( Sys_DoubleTime() - prof_newmap ) * 1000.0 );
 
 			Mod_LoadDetailTextures( cl.worldmodel );
 
@@ -1733,6 +1737,8 @@ void CL_RegisterResources( sizebuf_t *msg, connprotocol_t proto )
 				MSG_WriteStringf( msg, "spawn %i %i", cl.servercount, crc );
 			}
 			else MSG_WriteStringf( msg, "spawn %i", cl.servercount );
+
+			Con_Reportf( "^3[streamprof]^7 client prep total: %.2f ms\n", ( Sys_DoubleTime() - prof_prep ) * 1000.0 );
 		}
 	}
 	else

@@ -505,6 +505,13 @@ static double Host_CalcFPS( void )
 	{
 		fps = CL_GetDemoFramerate();
 	}
+	else if( cls.disable_screen != 0.0f )
+	{
+		// xash3d-streaming: rendering is frozen during changelevel/connect,
+		// don't frame-pace the signon handshake — every paced frame just
+		// delays the next handshake leg
+		fps = 0.0;
+	}
 	else if( Host_IsSinglePlayerGame( ))
 	{
 		if( !gl_vsync.value )

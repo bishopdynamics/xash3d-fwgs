@@ -27,6 +27,7 @@ CVAR_DEFINE( scr_viewsize, "viewsize", "120", FCVAR_ARCHIVE, "screen size (quake
 CVAR_DEFINE_AUTO( cl_testlights, "0", FCVAR_CHEAT, "test dynamic lights" );
 CVAR_DEFINE( cl_allow_levelshots, "allow_levelshots", "0", FCVAR_ARCHIVE, "allow engine to use indivdual levelshots instead of 'loading' image" );
 CVAR_DEFINE_AUTO( cl_levelshot_name, "*black", 0, "contains path to current levelshot" );
+static CVAR_DEFINE_AUTO( cl_seamless_changelevel, "1", 0, "no loading plaque on level transitions: keep the last frame on screen" );
 static CVAR_DEFINE_AUTO( cl_envshot_size, "256", FCVAR_ARCHIVE, "envshot size of cube side" );
 CVAR_DEFINE_AUTO( v_dark, "0", 0, "starts level from dark screen" );
 static CVAR_DEFINE_AUTO( net_speeds, "0", FCVAR_ARCHIVE, "show network packets" );
@@ -491,8 +492,16 @@ static qboolean SCR_DrawPlaque( void )
 SCR_BeginLoadingPlaque
 ================
 */
+static double scr_plaque_starttime;
+
 void SCR_BeginLoadingPlaque( qboolean is_background )
 {
+	// seamless changelevel (xash3d-streaming): no plaque, no extra frame —
+	// rendering freezes on the last presented frame (disable_screen blocks
+	// V_PreRender) and resumes when the new level is ready
+	qboolean seamless = cl_seamless_changelevel.value && cls.changelevel && !is_background;
+
+	scr_plaque_starttime = Sys_DoubleTime();
 	S_StopAllSounds( true );
 	cl.audio_prepped = false;			// don't play ambients
 
@@ -510,8 +519,12 @@ void SCR_BeginLoadingPlaque( qboolean is_background )
 		return;
 
 	if( is_background ) IN_MouseSavePos( );
-	cls.draw_changelevel = !is_background;
-	SCR_UpdateScreen();
+
+	if( !seamless )
+	{
+		cls.draw_changelevel = !is_background;
+		SCR_UpdateScreen();
+	}
 
 	// set video_prepped after update screen, so engine can draw last remaining frame
 	cl.video_prepped = false;
@@ -528,6 +541,12 @@ SCR_EndLoadingPlaque
 */
 void SCR_EndLoadingPlaque( void )
 {
+	if( cls.disable_screen != 0.0f && scr_plaque_starttime != 0.0 )
+	{
+		Con_Reportf( "^3[streamprof]^7 client blackout (plaque begin -> end): %.2f ms\n",
+			( Sys_DoubleTime() - scr_plaque_starttime ) * 1000.0 );
+		scr_plaque_starttime = 0.0;
+	}
 	cls.disable_screen = 0.0f;
 	Con_ClearNotify();
 //	SNDDMA_UnlockSound();
@@ -914,6 +933,7 @@ void SCR_Init( void )
 	Cvar_RegisterVariable( &scr_centertime );
 	Cvar_RegisterVariable( &cl_levelshot_name );
 	Cvar_RegisterVariable( &cl_allow_levelshots );
+	Cvar_RegisterVariable( &cl_seamless_changelevel );
 	Cvar_RegisterVariable( &scr_loading );
 	Cvar_RegisterVariable( &scr_download );
 	Cvar_RegisterVariable( &cl_testlights );
