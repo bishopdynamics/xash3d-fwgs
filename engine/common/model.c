@@ -34,6 +34,7 @@ CVAR_DEFINE_AUTO( r_showhull, "0", 0, "draw collision hulls 1-3" );
 CVAR_DEFINE_AUTO( r_allow_wad3_luma, "0", FCVAR_LATCH|FCVAR_ARCHIVE, "allow usage of luma textures in wad3 (tilde textures)" );
 static CVAR_DEFINE_AUTO( mod_world_residency, "1", 0, "keep parsed world models resident across changelevels for instant revisits" );
 static void Mod_FreeCachedWorlds( void );
+static void Mod_PreloadWorld_f( void );
 
 /*
 ===============================================================================
@@ -186,6 +187,7 @@ void Mod_Init( void )
 
 	Cmd_AddCommand( "mapstats", Mod_PrintWorldStats_f, "show stats for currently loaded map" );
 	Cmd_AddCommand( "modellist", Mod_Modellist_f, "display loaded models list" );
+	Cmd_AddCommand( "world_preload", Mod_PreloadWorld_f, "load a map's world into the residency cache ahead of time" );
 
 	Mod_ResetStudioAPI ();
 	Mod_InitStudioHull ();
@@ -625,6 +627,55 @@ static void Mod_FreeCachedWorlds( void )
 		Mem_Free( wc );
 	}
 	wc_list = NULL;
+}
+
+/*
+==================
+Mod_PreloadWorld_f
+
+load a map's world model ahead of time and park it in the residency cache,
+so the eventual changelevel to it is a near-instant revisit. only allowed
+while no server is running (a preload would displace the active world in
+slot #0); meant to run behind the menu at startup, one map per frame.
+==================
+*/
+static void Mod_PreloadWorld_f( void )
+{
+	char	name[MAX_QPATH];
+	double	t;
+
+	if( Cmd_Argc() != 2 )
+	{
+		Con_Printf( S_USAGE "world_preload <mapname>\n" );
+		return;
+	}
+
+	if( !mod_world_residency.value )
+	{
+		Con_Printf( S_WARN "world_preload requires mod_world_residency 1\n" );
+		return;
+	}
+
+	if( SV_Active( ))
+	{
+		Con_Printf( S_WARN "world_preload: can't preload while a server is running\n" );
+		return;
+	}
+
+	Q_snprintf( name, sizeof( name ), "maps/%s.bsp", Cmd_Argv( 1 ));
+
+	if( Mod_FindCachedWorld( name ) || !Q_stricmp( mod_known->name, name ))
+		return; // already resident
+
+	if( !FS_FileExists( name, false ))
+	{
+		Con_Printf( S_WARN "world_preload: %s not found\n", name );
+		return;
+	}
+
+	t = Sys_DoubleTime();
+	Mod_LoadWorld( name, true );
+	Con_Reportf( "^3[streamprof]^7 world_preload %s: %.2f ms\n", name, ( Sys_DoubleTime() - t ) * 1000.0 );
 }
 
 /*
