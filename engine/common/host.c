@@ -663,6 +663,11 @@ void Host_Frame( double time )
 	if( host.framecount == 0 )
 		Con_DPrintf( "Time to first frame: %.3f seconds\n", t1 - host.starttime );
 
+	// commandline +commands are normally injected at the end of Host_Init, but
+	// if the .rc's stuffcmds was still queued behind `wait`s at that point
+	// (e.g. a wait-laden autoexec), the pending flag is raised later — honor it
+	Cbuf_ExecStuffCmds ();
+
 	Host_InputFrame ();  // input frame
 	Host_ClientBegin (); // begin client
 	Host_GetCommands (); // dedicated in
