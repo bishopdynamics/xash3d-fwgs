@@ -1070,6 +1070,33 @@ int S_GetCurrentDynamicSounds( soundlist_t *pout, int size )
 
 /*
 ===================
+S_CaptureTransitionSounds
+
+xash3d-streaming: the loading plaque stops all channels one host frame
+BEFORE the server saves transition state, so SaveClientState can never see
+them. snapshot the playing sounds here; the save consumes the snapshot.
+===================
+*/
+static soundlist_t	snd_transition_sounds[MAX_CHANNELS];
+static int	snd_transition_count;
+
+void S_CaptureTransitionSounds( void )
+{
+	snd_transition_count = S_GetCurrentDynamicSounds( snd_transition_sounds, MAX_CHANNELS );
+}
+
+int S_GetTransitionSounds( soundlist_t *pout, int size )
+{
+	int	count = Q_min( snd_transition_count, size );
+
+	memcpy( pout, snd_transition_sounds, sizeof( soundlist_t ) * count );
+	snd_transition_count = 0;
+
+	return count;
+}
+
+/*
+===================
 S_InitAmbientChannels
 ===================
 */

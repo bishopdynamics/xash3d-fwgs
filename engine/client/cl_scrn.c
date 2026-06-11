@@ -496,12 +496,24 @@ static double scr_plaque_starttime;
 
 void SCR_BeginLoadingPlaque( qboolean is_background )
 {
+	// NOTE: cls.changelevel is NOT set yet when the host state machine calls
+	// us right before SV_ExecChangeLevel (svc_changing arrives later) —
+	// detect the changelevel from the host state instead
+	qboolean changelevel = cls.changelevel || GameState->nextstate == STATE_CHANGELEVEL;
+
 	// seamless changelevel (xash3d-streaming): no plaque, no extra frame —
 	// rendering freezes on the last presented frame (disable_screen blocks
 	// V_PreRender) and resumes when the new level is ready
-	qboolean seamless = cl_seamless_changelevel.value && cls.changelevel && !is_background;
+	qboolean seamless = cl_seamless_changelevel.value && changelevel && !is_background;
 
 	scr_plaque_starttime = Sys_DoubleTime();
+
+	// on changelevel, snapshot the playing sounds before they are stopped:
+	// the server saves transition state one host frame from now and can
+	// resume these on entities that cross (see SaveClientState)
+	if( changelevel && !is_background )
+		S_CaptureTransitionSounds();
+
 	S_StopAllSounds( true );
 	cl.audio_prepped = false;			// don't play ambients
 

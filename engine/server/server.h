@@ -396,6 +396,7 @@ extern convar_t		sv_maxrate;
 extern convar_t		sv_downloadurl;
 extern convar_t		sv_newunit;
 extern convar_t		sv_transition_memstate;
+extern convar_t		sv_transition_sounds;
 extern convar_t		sv_clienttrace;
 extern convar_t		sv_failuretime;
 extern convar_t		sv_send_resources;

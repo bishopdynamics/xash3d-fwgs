@@ -897,6 +897,7 @@ void SV_Init( void )
 	Cvar_RegisterVariable( &sv_stepsize );
 	Cvar_RegisterVariable( &sv_newunit );
 	Cvar_RegisterVariable( &sv_transition_memstate );
+	Cvar_RegisterVariable( &sv_transition_sounds );
 	Cvar_RegisterVariable( &hostname );
 	Cvar_RegisterVariable( &sv_timeout );
 	Cvar_RegisterVariable( &sv_connect_timeout );

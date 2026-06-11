@@ -49,6 +49,7 @@ memory entry when one exists).
 ==============================================================================
 */
 CVAR_DEFINE_AUTO( sv_transition_memstate, "1", 0, "keep changelevel transition state in memory instead of save/*.HL? files" );
+CVAR_DEFINE_AUTO( sv_transition_sounds, "1", 0, "resume sounds of entities that cross a level transition at their saved sample position" );
 
 typedef struct msentry_s
 {
@@ -1394,11 +1395,26 @@ static qboolean SaveClientState( SAVERESTOREDATA *pSaveData, const char *level, 
 
 		header.decalCount = ref.dllFuncs.R_CreateDecalList( decalList );
 
-		if( !changelevel ) // sounds won't going across transition
+		// xash3d-streaming: on changelevel use the snapshot taken by the
+		// loading plaque (the live channels are already stopped by now) so
+		// sounds of crossing entities can be resumed at their sample position
+		if( changelevel && sv_transition_sounds.value )
 		{
+			header.soundCount = S_GetTransitionSounds( soundInfo, MAX_CHANNELS );
+
+			Con_Reportf( "^3[streamprof]^7 captured %i dynamic sounds for transition\n", header.soundCount );
+			for( i = 0; i < header.soundCount; i++ )
+				Con_Reportf( "^3[streamprof]^7   %s (ent %i chan %i pos %g)\n",
+					soundInfo[i].name, soundInfo[i].entnum, soundInfo[i].channel, soundInfo[i].samplePos );
+		}
+		else if( !changelevel )
 			header.soundCount = S_GetCurrentDynamicSounds( soundInfo, MAX_CHANNELS );
 
+		if( !changelevel )
+		{
 			// music not reqiured to save position: it's just continue playing on a next level
+			// (and on changelevel it must NOT be captured: a stale track would
+			// restart on a later revisit while the real music plays through)
 			S_StreamGetCurrentState(
 				header.introTrack, sizeof( header.introTrack ),
 				header.mainTrack, sizeof( header.mainTrack ),
@@ -1558,7 +1574,30 @@ static void LoadClientState( SAVERESTOREDATA *pSaveData, const char *level, qboo
 	for( i = 0; i < header.soundCount; i++ )
 	{
 		svgame.dllFuncs.pfnSaveReadFields( pSaveData, "SOUNDLIST", &soundEntry, gSoundEntry, ARRAYSIZE( gSoundEntry ));
-		if( adjacent ) continue; // sounds don't going across the levels
+
+		// xash3d-streaming: sounds captured at a changelevel travel WITH the
+		// player (restored below through the adjacent path) — when revisiting
+		// this map later they already played out; don't replay stale copies
+		if( changelevel && !adjacent )
+			continue;
+
+		if( adjacent )
+		{
+			// xash3d-streaming: sounds follow the entities they play on. only
+			// restore sounds whose entity crossed into this level, translated
+			// into our coordinate space (same dance as the decals above)
+			if( !sv_transition_sounds.value )
+				continue;
+
+			if( !SV_IsValidEdict( EdictFromTable( pSaveData, soundEntry.entnum )))
+				continue;
+
+			if( pSaveData->fUseLandmark )
+				VectorAdd( soundEntry.origin, pSaveData->vecLandmarkOffset, soundEntry.origin );
+
+			Con_Reportf( "^3[streamprof]^7 transition sound: %s (ent %i chan %i pos %g)\n",
+				soundEntry.name, soundEntry.entnum, soundEntry.channel, soundEntry.samplePos );
+		}
 
 		RestoreSound( pSaveData, &soundEntry );
 	}

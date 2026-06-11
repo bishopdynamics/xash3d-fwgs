@@ -109,6 +109,8 @@ channel_t *SND_PickDynamicChannel( int entnum, int channel, sfx_t *sfx, qboolean
 channel_t *SND_PickStaticChannel( const vec3_t pos, sfx_t *sfx );
 int S_GetCurrentStaticSounds( soundlist_t *pout, int size );
 int S_GetCurrentDynamicSounds( soundlist_t *pout, int size );
+void S_CaptureTransitionSounds( void );
+int S_GetTransitionSounds( soundlist_t *pout, int size );
 sfx_t *S_GetSfxByHandle( sound_t handle );
 rawchan_t *S_FindRawChannel( int entnum, qboolean create );
 uint S_RawSamplesStereo( portable_samplepair_t *rawsamples, uint rawend, uint max_samples, uint samples, uint rate, word width, word channels, const byte *data );

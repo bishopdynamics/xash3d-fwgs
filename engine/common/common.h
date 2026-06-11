@@ -877,6 +877,7 @@ qboolean S_Init( void );
 void S_Shutdown( void );
 void S_StopSound( int entnum, int channel, const char *soundname );
 int S_GetCurrentStaticSounds( soundlist_t *pout, int size );
+int S_GetTransitionSounds( soundlist_t *pout, int size );
 void S_StopBackgroundTrack( void );
 void S_StopAllSounds( qboolean ambient );
 
