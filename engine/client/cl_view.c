@@ -562,6 +562,7 @@ void V_PostRender( void )
 		R_ShowTree();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
+		Con_DrawMapName();
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
 		Touch_Draw();

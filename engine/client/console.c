@@ -32,6 +32,7 @@ static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font textur
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
 static CVAR_DEFINE_AUTO( con_color, "240 180 24", FCVAR_ARCHIVE, "set a custom console color" );
 static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
+static CVAR_DEFINE_AUTO( scr_drawmapname, "1", FCVAR_ARCHIVE, "draw current map name in the bottom right corner while in game" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );
 
@@ -789,6 +790,7 @@ void Con_Init( void )
 	Cvar_RegisterVariable( &con_fontnum );
 	Cvar_RegisterVariable( &con_color );
 	Cvar_RegisterVariable( &scr_drawversion );
+	Cvar_RegisterVariable( &scr_drawmapname );
 	Cvar_RegisterVariable( &con_oldfont );
 	Cvar_RegisterVariable( &con_showcompletion );
 
@@ -2085,6 +2087,34 @@ void Con_DrawVersion( void )
 	int height = refState.height - charH * 1.05f;
 
 	Con_DrawString( start, height, curbuild, color );
+}
+
+/*
+==================
+Con_DrawMapName
+
+current map name in the bottom right corner, one line above the build number
+==================
+*/
+void Con_DrawMapName( void )
+{
+	byte	*color = g_color_table[7];
+	int	stringLen, charH = 0;
+
+	if( !scr_drawmapname.value )
+		return;
+
+	if( cls.state != ca_active || cls.key_dest == key_menu || !clgame.mapname[0] )
+		return;
+
+	if( CL_IsDevOverviewMode() == 2 || net_graph.value )
+		return;
+
+	Con_DrawStringLen( clgame.mapname, &stringLen, &charH );
+	int start = refState.width - stringLen * 1.05f;
+	int height = refState.height - charH * 2.15f;
+
+	Con_DrawString( start, height, clgame.mapname, color );
 }
 
 /*
