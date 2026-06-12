@@ -237,18 +237,22 @@ qboolean OSK_KeyEvent( int key, int down )
 		}
 		break;
 	case K_UPARROW:
+	case K_DPAD_UP: // the d-pad arrives raw, not as arrows
 		if( down && --osk.curbutton.y < 0 )
 			osk.curbutton.y = MAX_OSK_LINES - 1;
 		break;
 	case K_DOWNARROW:
+	case K_DPAD_DOWN:
 		if( down && ++osk.curbutton.y >= MAX_OSK_LINES )
 			osk.curbutton.y = 0;
 		break;
 	case K_LEFTARROW:
+	case K_DPAD_LEFT:
 		if( down && --osk.curbutton.x < 0 )
 			osk.curbutton.x = MAX_OSK_ROWS - 1;
 		break;
 	case K_RIGHTARROW:
+	case K_DPAD_RIGHT:
 		if( down && ++osk.curbutton.x >= MAX_OSK_ROWS )
 			osk.curbutton.x = 0;
 		break;

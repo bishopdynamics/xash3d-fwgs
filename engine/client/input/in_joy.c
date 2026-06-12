@@ -185,9 +185,10 @@ static void Joy_ProcessTrigger( const engineAxis_t engineAxis, short value )
 	}
 }
 
-static int Joy_GetHatValueForAxis( const engineAxis_t engineAxis )
+static int Joy_GetHatValueForAxis( const engineAxis_t engineAxis, const int curState )
 {
 	int threshold, negative, positive;
+	int engage, release, val;
 
 	switch( engineAxis )
 	{
@@ -206,17 +207,20 @@ static int Joy_GetHatValueForAxis( const engineAxis_t engineAxis )
 		return 0;
 	}
 
-	// similar code in Joy_ProcessTrigger
-	if( joyaxis[engineAxis].val > threshold &&
-		joyaxis[engineAxis].prevval <= threshold ) // ignore random press
-	{
+	// report the held STATE, not the crossing edge: Joy_HatMotionEvent does
+	// its own edge detection, and edge-reporting here meant any jitter or any
+	// other axis event released the direction and re-pressed it — menus and
+	// the on-screen keyboard would skip 2-3 items per stick flick.
+	// Hysteresis: engage past the threshold, release only below 2/3 of it
+	engage = threshold;
+	release = threshold * 2 / 3;
+	val = joyaxis[engineAxis].val;
+
+	if( val > (( curState & positive ) ? release : engage ))
 		return positive;
-	}
-	if( joyaxis[engineAxis].val < -threshold &&
-		joyaxis[engineAxis].prevval >= -threshold ) // we're unpressing (inverted)
-	{
+	if( val < -(( curState & negative ) ? release : engage ))
 		return negative;
-	}
+
 	return 0;
 }
 
@@ -249,14 +253,17 @@ static void Joy_ProcessStick( const engineAxis_t engineAxis, short value )
 	joyaxis[engineAxis].prevval = joyaxis[engineAxis].val;
 	joyaxis[engineAxis].val = value;
 
-	// fwd/side axis simulate hat movement
+	// fwd/side axis simulate hat movement (key_message: the on-screen
+	// keyboard navigates with the stick during in-game chat too)
 	if( ( engineAxis == JOY_AXIS_SIDE || engineAxis == JOY_AXIS_FWD ) &&
-		( cls.key_dest == key_menu || cls.key_dest == key_console ))
+		( cls.key_dest == key_menu || cls.key_dest == key_console || cls.key_dest == key_message ))
 	{
+		static int stickHat; // current simulated-hat state, for hysteresis
 		int val = 0;
 
-		val |= Joy_GetHatValueForAxis( JOY_AXIS_SIDE );
-		val |= Joy_GetHatValueForAxis( JOY_AXIS_FWD );
+		val |= Joy_GetHatValueForAxis( JOY_AXIS_SIDE, stickHat );
+		val |= Joy_GetHatValueForAxis( JOY_AXIS_FWD, stickHat );
+		stickHat = val;
 
 		Joy_HatMotionEvent( val );
 	}
