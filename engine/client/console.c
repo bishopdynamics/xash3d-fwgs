@@ -28,6 +28,7 @@ static CVAR_DEFINE_AUTO( con_notifytime, "3", FCVAR_ARCHIVE, "notify time to liv
 CVAR_DEFINE_AUTO( con_fontsize, "1", FCVAR_ARCHIVE, "console font number (0, 1 or 2)" );
 static CVAR_DEFINE_AUTO( con_fontrender, "2", FCVAR_ARCHIVE, "console font render mode (0: additive, 1: holes, 2: trans)" );
 static CVAR_DEFINE_AUTO( con_ttffont, "1", FCVAR_ARCHIVE | FCVAR_FILTERABLE, "render the console with gfx/fonts/console.ttf instead of the classic bitmap fonts" );
+static CVAR_DEFINE_AUTO( con_enable, "0", FCVAR_ARCHIVE | FCVAR_FILTERABLE, "allow opening the developer console; the -console and -dev launch flags always allow it" );
 static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font charset (only cp1251 supported now)" );
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
@@ -811,6 +812,7 @@ void Con_Init( void )
 	Cvar_RegisterVariable( &con_fontscale );
 	Cvar_RegisterVariable( &con_fontrender );
 	Cvar_RegisterVariable( &con_ttffont );
+	Cvar_RegisterVariable( &con_enable );
 	Cvar_RegisterVariable( &con_fontnum );
 	Cvar_RegisterVariable( &con_color );
 	Cvar_RegisterVariable( &scr_drawversion );
@@ -2193,6 +2195,26 @@ void Con_RunConsole( void )
 		con.vislines += lines_per_frame;
 		if( con.showlines < con.vislines )
 			con.vislines = con.showlines;
+	}
+
+	// xash3d-streaming: the Enable Console toggle governs sessions that were
+	// not already blessed by -console/-dev (those always keep the console)
+	if( FBitSet( con_enable.flags, FCVAR_CHANGED ))
+	{
+		ClearBits( con_enable.flags, FCVAR_CHANGED );
+
+		if( !host.allow_console_init )
+		{
+			host.allow_console = con_enable.value != 0.0f;
+
+			// it just got disabled while open: close it like the toggle key would
+			if( !host.allow_console && cls.key_dest == key_console )
+				UI_SetActiveMenu( cls.state != ca_active );
+
+			// the conback was picked at vid init while the console was still
+			// disabled ("loading" plaque) — reselect it for the new state
+			Con_VidInit();
+		}
 	}
 
 	if( FBitSet( con_charset.flags|con_fontscale.flags|con_fontnum.flags|cl_charset.flags|con_oldfont.flags|con_ttffont.flags, FCVAR_CHANGED ))
