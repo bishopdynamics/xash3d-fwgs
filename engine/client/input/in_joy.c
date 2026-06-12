@@ -118,6 +118,12 @@ DPad events
 */
 static void Joy_HatMotionEvent( int value )
 {
+	// track what WE emitted instead of asking Key_IsDown: consumers like the
+	// on-screen keyboard swallow the event before the key-state table updates,
+	// which made every analog wiggle look like a fresh press — the simulated
+	// keys hammered down events and the selection flew across the screen
+	static int emitted;
+
 	struct
 	{
 		int mask;
@@ -134,15 +140,17 @@ static void Joy_HatMotionEvent( int value )
 	{
 		if( value & keys[i].mask )
 		{
-			if( !Key_IsDown( keys[i].key ))
+			if( !( emitted & keys[i].mask ))
 				Key_Event( keys[i].key, true );
 		}
 		else
 		{
-			if( Key_IsDown( keys[i].key ))
+			if( emitted & keys[i].mask )
 				Key_Event( keys[i].key, false );
 		}
 	}
+
+	emitted = value;
 }
 
 /*
