@@ -1200,6 +1200,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cvar_RegisterVariable( &host_serverstate );
 	Cvar_RegisterVariable( &host_maxfps );
 	Cvar_RegisterVariable( &host_level_streaming );
+	Cvar_Get( "ui_classic", "0", FCVAR_ARCHIVE, "use the original menu style instead of the Continuum menu" );
 	Cvar_RegisterVariable( &fps_override );
 	Cvar_RegisterVariable( &host_framerate );
 	Cvar_RegisterVariable( &host_sleeptime );
