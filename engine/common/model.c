@@ -217,8 +217,10 @@ Mod_ClearUserData
 */
 void Mod_ClearUserData( void )
 {
-	// render data of cached worlds can't be recreated later (no source buffer);
-	// drop the cache so a renderer restart can't leave stale texture handles
+	// called when the client game library unloads (game change/shutdown):
+	// the next game has different BSPs, drop the cache with its texture
+	// handles. NOT hit by video mode changes — those keep the GL context,
+	// and the cache (verified) survives them.
 	Mod_FreeCachedWorlds();
 
 	for( int i = 0; i < mod_numknown; i++ )
