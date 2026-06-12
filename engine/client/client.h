@@ -1132,6 +1132,7 @@ void GAME_EXPORT Con_DrawStringLen( const char *pText, int *length, int *height 
 void Con_CharEvent( int key );
 void Key_Console( int key );
 void Key_Message( int key );
+const char *Con_GetChatText( void );
 void Con_FastClose( void );
 void Con_Bottom( void );
 void Con_PageDown( int lines );

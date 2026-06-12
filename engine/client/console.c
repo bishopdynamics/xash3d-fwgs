@@ -1625,6 +1625,18 @@ void Key_Console( int key )
 
 /*
 ================
+Con_GetChatText
+
+current say/say_team input, for the on-screen keyboard preview
+================
+*/
+const char *Con_GetChatText( void )
+{
+	return con.chat.buffer;
+}
+
+/*
+================
 Key_Message
 
 In game talk message
