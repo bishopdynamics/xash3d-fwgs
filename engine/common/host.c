@@ -1289,6 +1289,22 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 			Cbuf_Execute();
 		}
 
+		// Continuum unified config: shared cvars/bindings for all games live
+		// in the base game dir (valve/unified.cfg, reachable through the
+		// search path from every game) and override the per-game config;
+		// localconfig.cfg is the optional per-game escape hatch on top
+		if( FS_FileExists( "unified.cfg", false ))
+		{
+			Cbuf_AddText( "exec unified.cfg\n" );
+			Cbuf_Execute();
+		}
+
+		if( FS_FileExists( "localconfig.cfg", false ))
+		{
+			Cbuf_AddText( "exec localconfig.cfg\n" );
+			Cbuf_Execute();
+		}
+
 		// exec all files from userconfig.d
 		Cbuf_AddText( "userconfigd\n" );
 		Cbuf_Execute();
@@ -1298,6 +1314,10 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		host.stuffcmds_pending = true;
 		break;
 	}
+
+	// let the menu know it should land on the game page after a game switch
+	Cvar_Get( "host_changegame_boot", host.change_game ? "1" : "0", 0,
+		"set to 1 when the engine was restarted by changing games; the menu clears it" );
 
 	host.change_game = false;	// done
 	Cbuf_ExecStuffCmds();	// execute stuffcmds (commandline)

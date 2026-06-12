@@ -314,6 +314,17 @@ static qboolean R_Init_Video_( ref_graphic_apis_t type )
 		host.apply_opengl_config = false;
 	}
 
+	// Continuum unified config: shared renderer settings (RENDERINFO +
+	// GLCONFIG cvars) override the per-game video/renderer configs, right
+	// before video init applies them
+	if( FS_FileExists( "unified_video.cfg", false ))
+	{
+		host.apply_opengl_config = true;
+		Cbuf_AddText( "exec unified_video.cfg\n" );
+		Cbuf_Execute();
+		host.apply_opengl_config = false;
+	}
+
 	return R_Init_Video( type );
 }
 

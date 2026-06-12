@@ -1387,6 +1387,92 @@ void Host_FinalizeConfig( file_t *f, const char *config )
 #if !XASH_DEDICATED
 /*
 ===============
+Host_WriteUnifiedConfig
+
+Continuum unified config: mirror of config.cfg written into the base game
+directory (valve/), where the filesystem search path makes it visible to
+every game. Host_Init execs it after the per-game config so its values win.
+===============
+*/
+static void Host_WriteUnifiedConfig( void )
+{
+	kbutton_t *mlook = NULL;
+	kbutton_t *jlook = NULL;
+	string path;
+	file_t *f;
+
+	if( !clgame.hInstance || Sys_CheckParm( "-nowriteconfig" ) || Sys_CheckParm( "-nounified" ))
+		return;
+
+	// "../<basedir>/..." escapes the per-game write path; same trick as help.txt
+	Q_snprintf( path, sizeof( path ), "../%s/unified.cfg", GI->basedir );
+
+	FS_AllowDirectPaths( true );
+
+	f = FS_Open( va( "%s.new", path ), "w", false );
+	if( f )
+	{
+		Con_Reportf( "%s()\n", __func__ );
+		Host_InitializeConfig( f, "unified.cfg", "shared cvars and bindings for all games" );
+		Key_WriteBindings( f );
+		Cvar_WriteVariables( f, FCVAR_ARCHIVE );
+		Info_WriteVars( f );
+
+		if( clgame.hInstance )
+		{
+			mlook = (kbutton_t *)clgame.dllFuncs.KB_Find( "in_mlook" );
+			jlook = (kbutton_t *)clgame.dllFuncs.KB_Find( "in_jlook" );
+		}
+
+		if( mlook && ( mlook->state & 1 ))
+			FS_Printf( f, "+mlook\n" );
+
+		if( jlook && ( jlook->state & 1 ))
+			FS_Printf( f, "+jlook\n" );
+
+		Host_FinalizeConfig( f, path );
+	}
+	else Con_DPrintf( S_ERROR "Couldn't write unified.cfg.\n" );
+
+	FS_AllowDirectPaths( false );
+}
+
+/*
+===============
+Host_WriteUnifiedVideoConfig
+
+shared renderer settings (video.cfg + renderer cfg equivalents), execed by
+R_Init_Video right before video init
+===============
+*/
+static void Host_WriteUnifiedVideoConfig( void )
+{
+	string path;
+	file_t *f;
+
+	if( Sys_CheckParm( "-nowriteconfig" ) || Sys_CheckParm( "-nounified" ))
+		return;
+
+	Q_snprintf( path, sizeof( path ), "../%s/unified_video.cfg", GI->basedir );
+
+	FS_AllowDirectPaths( true );
+
+	f = FS_Open( va( "%s.new", path ), "w", false );
+	if( f )
+	{
+		Con_Reportf( "%s()\n", __func__ );
+		Host_InitializeConfig( f, "unified_video.cfg", "shared renderer variables for all games" );
+		Cvar_WriteVariables( f, FCVAR_RENDERINFO );
+		Cmd_WriteOpenGLVariables( f );
+		Host_FinalizeConfig( f, path );
+	}
+	else Con_DPrintf( S_ERROR "can't update unified_video.cfg.\n" );
+
+	FS_AllowDirectPaths( false );
+}
+
+/*
+===============
 Host_WriteConfig
 
 Writes key bindings and archived cvars to config.cfg
@@ -1426,6 +1512,8 @@ void Host_WriteConfig( void )
 		Host_FinalizeConfig( f, "config.cfg" );
 	}
 	else Con_DPrintf( S_ERROR "Couldn't write config.cfg.\n" );
+
+	Host_WriteUnifiedConfig();
 
 	NET_SaveMasters();
 
@@ -1510,6 +1598,8 @@ void Host_WriteVideoConfig( void )
 		Host_FinalizeConfig( f, "video.cfg" );
 	}
 	else Con_DPrintf( S_ERROR "can't update video.cfg.\n" );
+
+	Host_WriteUnifiedVideoConfig();
 }
 #endif // XASH_DEDICATED
 

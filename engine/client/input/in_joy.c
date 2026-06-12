@@ -596,6 +596,10 @@ void Joy_Init( void )
 	Cvar_RegisterVariable( &joy_have_gyro );
 	Cvar_RegisterVariable( &joy_calibrated );
 	Cvar_RegisterVariable( &joy_enable );
+
+	// raw SDL_GameControllerType of the active pad, updated by the platform
+	// layer; the menu uses it to choose matching button glyphs
+	Cvar_Get( "joy_controller_type", "0", FCVAR_READ_ONLY, "type of the active game controller (0 = none/unknown)" );
 	Cvar_RegisterVariable( &joy_gyro_enable );
 
 	Cvar_RegisterVariable( &joy_gyro_pitch );

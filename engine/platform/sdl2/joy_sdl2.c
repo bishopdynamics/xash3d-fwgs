@@ -172,12 +172,24 @@ static void SDLash_SetActiveGameController( SDL_JoystickID id )
 		g_current_gamepad = NULL;
 		Joy_SetCapabilities( false );
 		Joy_SetCalibrationState( JOY_NOT_CALIBRATED );
+		Cvar_FullSet( "joy_controller_type", "0", FCVAR_READ_ONLY );
 	}
 	else
 	{
 		qboolean have_gyro = false;
 
 		g_current_gamepad = SDL_GameControllerFromInstanceID( id );
+
+		// expose the raw SDL controller type so the menu can pick matching
+		// button glyphs (Xbox/PS/Switch)
+#if SDL_VERSION_ATLEAST( 2, 0, 12 )
+		if( g_current_gamepad )
+		{
+			char type[8];
+			Q_snprintf( type, sizeof( type ), "%d", (int)SDL_GameControllerGetType( g_current_gamepad ));
+			Cvar_FullSet( "joy_controller_type", type, FCVAR_READ_ONLY );
+		}
+#endif // SDL_VERSION_ATLEAST( 2, 0, 12 )
 
 #if SDL_VERSION_ATLEAST( 2, 0, 14 )
 		have_gyro = SDL_GameControllerHasSensor( g_current_gamepad, SDL_SENSOR_GYRO );
