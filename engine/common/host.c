@@ -1309,8 +1309,10 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 
 		// xash3d-streaming: warm the residency cache for the whole campaign.
 		// Exec'd by the engine (not autoexec.cfg) so it runs after the
-		// configs above have decided host_level_streaming
-		if( host_level_streaming.value && FS_FileExists( "streampreload.cfg", false ))
+		// configs above have decided host_level_streaming. gamedironly:
+		// a mod that inherits valve/ through the search path must not warm
+		// valve's campaign — only a preload list derived from its own maps
+		if( host_level_streaming.value && FS_FileExists( "streampreload.cfg", true ))
 		{
 			Cbuf_AddText( "exec streampreload.cfg\n" );
 			Cbuf_Execute();
