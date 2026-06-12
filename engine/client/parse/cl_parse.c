@@ -481,6 +481,12 @@ int CL_EstimateNeededResources( void )
 {
 	int nTotalSize = 0;
 
+	// xash3d-streaming: a local client shares the filesystem with its server,
+	// so nothing the server just precached can be missing — skip the per-file
+	// FS_FileExists probes (~2 ms of every changelevel on a typical HL map)
+	if( Host_IsLocalClient( ))
+		return 0;
+
 	for( resource_t *p = cl.resourcesneeded.pNext; p != &cl.resourcesneeded; p = p->pNext )
 	{
 		switch( p->type )

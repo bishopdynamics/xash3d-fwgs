@@ -378,13 +378,18 @@ static void SV_CreateResourceList( void )
 	int	i, nSize;
 	char	*s;
 
+	// xash3d-streaming: resource sizes only matter when a remote client may
+	// download; in singleplayer the per-file FS_FileSize probes are pure
+	// waste (~4 ms of every changelevel on a typical HL map)
+	qboolean need_sizes = svs.maxclients > 1;
+
 	sv.num_resources = 0;
 
 	for( i = 1; i < MAX_CUSTOM; i++ )
 	{
 		s = sv.files_precache[i];
 		if( COM_StringEmptyOrNULL( s )) break; // end of list
-		nSize = FS_FileSize( s, false );
+		nSize = need_sizes ? FS_FileSize( s, false ) : 0;
 		SV_AddResource( t_generic, s, nSize, RES_FATALIFMISSING, i );
 	}
 
@@ -405,7 +410,7 @@ static void SV_CreateResourceList( void )
 		}
 		else
 		{
-			nSize = FS_FileSize( va( DEFAULT_SOUNDPATH "%s", s ), false );
+			nSize = need_sizes ? FS_FileSize( va( DEFAULT_SOUNDPATH "%s", s ), false ) : 0;
 			SV_AddResource( t_sound, s, nSize, 0, i );
 		}
 	}
@@ -414,7 +419,7 @@ static void SV_CreateResourceList( void )
 	{
 		s = sv.model_precache[i];
 		if( COM_StringEmptyOrNULL( s )) break; // end of list
-		nSize = ( s[0] != '*' ) ? FS_FileSize( s, false ) : 0;
+		nSize = ( need_sizes && s[0] != '*' ) ? FS_FileSize( s, false ) : 0;
 		SV_AddResource( t_model, s, nSize, sv.model_precache_flags[i], i );
 	}
 
@@ -428,7 +433,7 @@ static void SV_CreateResourceList( void )
 	{
 		s = sv.event_precache[i];
 		if( COM_StringEmptyOrNULL( s )) break; // end of list
-		nSize = FS_FileSize( s, false );
+		nSize = need_sizes ? FS_FileSize( s, false ) : 0;
 		SV_AddResource( t_eventscript, s, nSize, RES_FATALIFMISSING, i );
 	}
 }
