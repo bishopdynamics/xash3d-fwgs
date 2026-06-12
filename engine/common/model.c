@@ -658,6 +658,9 @@ static void Mod_PreloadWorld_f( void )
 		return;
 	}
 
+	if( !host_level_streaming.value )
+		return; // streaming disabled by the user, silently skip preloads
+
 	if( SV_Active( ))
 	{
 		Con_Printf( S_WARN "world_preload: can't preload while a server is running\n" );

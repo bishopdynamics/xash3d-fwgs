@@ -504,7 +504,7 @@ void SCR_BeginLoadingPlaque( qboolean is_background )
 	// seamless changelevel (xash3d-streaming): no plaque, no extra frame —
 	// rendering freezes on the last presented frame (disable_screen blocks
 	// V_PreRender) and resumes when the new level is ready
-	qboolean seamless = cl_seamless_changelevel.value && changelevel && !is_background;
+	qboolean seamless = cl_seamless_changelevel.value && host_level_streaming.value && changelevel && !is_background;
 
 	scr_plaque_starttime = Sys_DoubleTime();
 

@@ -80,6 +80,7 @@ static CVAR_DEFINE_AUTO( host_framerate, "0", FCVAR_FILTERABLE, "locks frame tim
 static CVAR_DEFINE( host_sleeptime, "sleeptime", "1", FCVAR_ARCHIVE|FCVAR_FILTERABLE, "milliseconds to sleep for each frame. higher values reduce fps accuracy" );
 static CVAR_DEFINE_AUTO( host_sleeptime_debug, "0", 0, "print sleeps between frames" );
 CVAR_DEFINE_AUTO( host_allow_materials, "0", FCVAR_LATCH|FCVAR_ARCHIVE, "allow texture replacements from materials/ folder" );
+CVAR_DEFINE_AUTO( host_level_streaming, "1", FCVAR_ARCHIVE, "seamless level transitions: campaign preload, in-memory transition state, no loading plaque" );
 CVAR_DEFINE( con_gamemaps, "con_mapfilter", "1", FCVAR_ARCHIVE, "when true show only maps in game folder" );
 CVAR_DEFINE_AUTO( cl_background, "0", FCVAR_READ_ONLY, "if set to 1, client running a background map" );
 CVAR_DEFINE_AUTO( sv_background, "0", FCVAR_READ_ONLY, "if set to 1, server running a background map" );
@@ -1198,6 +1199,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cvar_RegisterVariable( &host_allow_materials );
 	Cvar_RegisterVariable( &host_serverstate );
 	Cvar_RegisterVariable( &host_maxfps );
+	Cvar_RegisterVariable( &host_level_streaming );
 	Cvar_RegisterVariable( &fps_override );
 	Cvar_RegisterVariable( &host_framerate );
 	Cvar_RegisterVariable( &host_sleeptime );
@@ -1302,6 +1304,15 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		if( FS_FileExists( "localconfig.cfg", false ))
 		{
 			Cbuf_AddText( "exec localconfig.cfg\n" );
+			Cbuf_Execute();
+		}
+
+		// xash3d-streaming: warm the residency cache for the whole campaign.
+		// Exec'd by the engine (not autoexec.cfg) so it runs after the
+		// configs above have decided host_level_streaming
+		if( host_level_streaming.value && FS_FileExists( "streampreload.cfg", false ))
+		{
+			Cbuf_AddText( "exec streampreload.cfg\n" );
 			Cbuf_Execute();
 		}
 

@@ -115,7 +115,7 @@ static savefile_t *SaveFile_Open( const char *name, qboolean write )
 
 	if( write )
 	{
-		if( sv_transition_memstate.value && SaveFile_IsTransitionFile( name ))
+		if( sv_transition_memstate.value && host_level_streaming.value && SaveFile_IsTransitionFile( name ))
 		{
 			f->wcap = 0x10000;
 			f->wbuf = Mem_Malloc( host.mempool, f->wcap );
@@ -1398,7 +1398,7 @@ static qboolean SaveClientState( SAVERESTOREDATA *pSaveData, const char *level, 
 		// xash3d-streaming: on changelevel use the snapshot taken by the
 		// loading plaque (the live channels are already stopped by now) so
 		// sounds of crossing entities can be resumed at their sample position
-		if( changelevel && sv_transition_sounds.value )
+		if( changelevel && sv_transition_sounds.value && host_level_streaming.value )
 		{
 			header.soundCount = S_GetTransitionSounds( soundInfo, MAX_CHANNELS );
 
@@ -1586,7 +1586,7 @@ static void LoadClientState( SAVERESTOREDATA *pSaveData, const char *level, qboo
 			// xash3d-streaming: sounds follow the entities they play on. only
 			// restore sounds whose entity crossed into this level, translated
 			// into our coordinate space (same dance as the decals above)
-			if( !sv_transition_sounds.value )
+			if( !sv_transition_sounds.value || !host_level_streaming.value )
 				continue;
 
 			if( !SV_IsValidEdict( EdictFromTable( pSaveData, soundEntry.entnum )))

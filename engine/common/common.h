@@ -152,6 +152,7 @@ extern convar_t	scr_download;
 extern convar_t	cmd_scripting;
 extern convar_t	host_allow_materials;
 extern convar_t	host_developer;
+extern convar_t	host_level_streaming;
 extern convar_t	host_limitlocal;
 extern convar_t	host_maxfps;
 extern convar_t	fps_override;
