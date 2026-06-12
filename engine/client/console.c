@@ -2153,7 +2153,10 @@ void Con_RunConsole( void )
 	}
 	else con.showlines = 0; // none visible
 
-	float lines_per_frame = fabs( scr_conspeed.value ) * host.realframetime;
+	// xash3d-streaming: scr_conspeed is pixels-per-second tuned for 480-line
+	// screens — at 1080p/4K the slide took 2-4x longer to cover the distance.
+	// Normalize to the 480-line reference so it feels the same everywhere
+	float lines_per_frame = fabs( scr_conspeed.value ) * host.realframetime * ( refState.height / 480.0f );
 
 	if( con.showlines < con.vislines )
 	{
