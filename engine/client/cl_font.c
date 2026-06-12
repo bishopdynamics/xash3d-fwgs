@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "qfont.h"
 #include "swaplib.h"
+#include "utflib.h"
 
 le_struct_begin( charinfo_swap )
 	le_struct_field( charinfo, startoffset )
@@ -113,6 +114,168 @@ qboolean Con_LoadFixedWidthFont( const char *fontname, cl_font_t *font, float sc
 
 		font->charWidths[i] = Q_rint( font_width / 16 * scale );
 	}
+
+	return true;
+}
+
+/*
+========================
+Con_LoadTTFFont
+
+xash3d-streaming: rasterize a TrueType font from the search path into a
+glyph atlas with stb_truetype, so the console (and everything drawn with
+engine fonts) gets smooth, resolution-scaled text instead of the bitmap
+wad fonts. The 256 glyph slots follow the active codepage, matching how
+the rest of the engine maps bytes to glyphs.
+========================
+*/
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include "stb_truetype.h"
+
+static uint32_t CL_FontCodepoint( int i )
+{
+	// glyph slot -> unicode codepoint for the active codepage
+	if( i < 0x80 )
+		return i;
+
+	if( Con_GetCodepage() == 1251 )
+		return Q_CP1251ToUnicode( i );
+
+	return i; // cp1252 handled as latin-1, like Q_UnicodeToCP1252 does
+}
+
+qboolean Con_LoadTTFFont( const char *fontname, cl_font_t *font, int pixelHeight, convar_t *rendermode )
+{
+	stbtt_fontinfo info;
+	fs_offset_t length;
+	byte *data;
+	byte *rgba;
+	rgbdata_t pic;
+	float scale;
+	int ascent, descent, linegap;
+	int cellW, cellH, atlasW, atlasH;
+	int i, maxAdvance = 0;
+	char texName[64];
+
+	if( !rendermode )
+		return false;
+
+	if( font->valid )
+		return true; // already loaded
+
+	if( pixelHeight < 8 )
+		pixelHeight = 8;
+
+	data = g_fsapi.LoadFile( fontname, &length, false );
+	if( !data )
+		return false;
+
+	if( !stbtt_InitFont( &info, data, stbtt_GetFontOffsetForIndex( data, 0 )))
+	{
+		Mem_Free( data );
+		return false;
+	}
+
+	stbtt_GetFontVMetrics( &info, &ascent, &descent, &linegap );
+	scale = stbtt_ScaleForPixelHeight( &info, (float)pixelHeight );
+
+	// find the widest advance so every glyph fits its grid cell
+	for( i = 32; i < 256; i++ )
+	{
+		int advance, lsb;
+
+		stbtt_GetCodepointHMetrics( &info, CL_FontCodepoint( i ), &advance, &lsb );
+		maxAdvance = Q_max( maxAdvance, Q_rint( advance * scale ));
+	}
+
+	cellW = maxAdvance + 2;
+	cellH = pixelHeight + 2;
+	atlasW = cellW * 16;
+	atlasH = cellH * 16;
+
+	rgba = Mem_Calloc( host.mempool, atlasW * atlasH * 4 );
+
+	font->type = FONT_VARIABLE;
+	font->scale = 1.0f; // size is baked into the atlas
+	font->rendermode = rendermode;
+	font->charHeight = cellH;
+
+	for( i = 0; i < 256; i++ )
+	{
+		const uint32_t cp = CL_FontCodepoint( i );
+		const int cx = ( i % 16 ) * cellW;
+		const int cy = ( i / 16 ) * cellH;
+		int advance, lsb, x0, y0, x1, y1, gw, gh, px, py, x, y;
+		byte *mono;
+
+		if( i < 32 || !stbtt_FindGlyphIndex( &info, cp ))
+		{
+			font->charWidths[i] = 0;
+			memset( &font->fontRc[i], 0, sizeof( font->fontRc[i] ));
+			continue;
+		}
+
+		stbtt_GetCodepointHMetrics( &info, cp, &advance, &lsb );
+		font->charWidths[i] = Q_rint( advance * scale );
+
+		font->fontRc[i].left   = cx;
+		font->fontRc[i].right  = cx + Q_max( 1, font->charWidths[i] );
+		font->fontRc[i].top    = cy;
+		font->fontRc[i].bottom = cy + cellH;
+
+		stbtt_GetCodepointBitmapBox( &info, cp, scale, scale, &x0, &y0, &x1, &y1 );
+		gw = x1 - x0;
+		gh = y1 - y0;
+
+		if( gw <= 0 || gh <= 0 )
+			continue; // space and friends
+
+		// glyph origin inside the cell: pen at the left edge, baseline at ascent
+		px = bound( 0, x0, cellW - 1 );
+		py = bound( 0, Q_rint( ascent * scale ) + y0 + 1, cellH - 1 );
+		gw = Q_min( gw, cellW - px );
+		gh = Q_min( gh, cellH - py );
+
+		mono = Mem_Malloc( host.mempool, gw * gh );
+		stbtt_MakeCodepointBitmap( &info, mono, gw, gh, gw, scale, scale, cp );
+
+		for( y = 0; y < gh; y++ )
+		{
+			byte *dst = rgba + (( cy + py + y ) * atlasW + cx + px ) * 4;
+			const byte *src = mono + y * gw;
+
+			for( x = 0; x < gw; x++, dst += 4 )
+			{
+				dst[0] = dst[1] = dst[2] = 255;
+				dst[3] = src[x];
+			}
+		}
+
+		Mem_Free( mono );
+	}
+
+	Mem_Free( data );
+
+	memset( &pic, 0, sizeof( pic ));
+	pic.width = atlasW;
+	pic.height = atlasH;
+	pic.depth = 1;
+	pic.type = PF_RGBA_32;
+	pic.flags = IMAGE_HAS_ALPHA;
+	pic.buffer = rgba;
+	pic.size = atlasW * atlasH * 4;
+
+	// unique name per slot; linear filtering is the whole point, no TF_NEAREST
+	Q_snprintf( texName, sizeof( texName ), "#con_ttf_%ipx", pixelHeight );
+	font->hFontTexture = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, &pic, TF_FONT|TF_CLAMP, false );
+
+	Mem_Free( rgba );
+
+	if( !font->hFontTexture )
+		return false;
+
+	font->valid = true;
 
 	return true;
 }

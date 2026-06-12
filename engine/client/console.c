@@ -27,6 +27,7 @@ static CVAR_DEFINE_AUTO( scr_conspeed, "600", FCVAR_ARCHIVE, "console moving spe
 static CVAR_DEFINE_AUTO( con_notifytime, "3", FCVAR_ARCHIVE, "notify time to live" );
 CVAR_DEFINE_AUTO( con_fontsize, "1", FCVAR_ARCHIVE, "console font number (0, 1 or 2)" );
 static CVAR_DEFINE_AUTO( con_fontrender, "2", FCVAR_ARCHIVE, "console font render mode (0: additive, 1: holes, 2: trans)" );
+static CVAR_DEFINE_AUTO( con_ttffont, "1", FCVAR_ARCHIVE | FCVAR_FILTERABLE, "render the console with gfx/fonts/console.ttf instead of the classic bitmap fonts" );
 static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font charset (only cp1251 supported now)" );
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
@@ -560,7 +561,17 @@ static void Con_LoadConsoleFont( int fontNumber, cl_font_t *font )
 	if( font->valid )
 		return; // already loaded
 
-	if( con_oldfont.value )
+	// xash3d-streaming: smooth TrueType console, scaled with the screen like
+	// the menus; the bitmap paths below remain the fallback and the opt-out
+	if( con_ttffont.value && !con_oldfont.value )
+	{
+		const int px = Q_rint(( 12 + fontNumber * 4 ) * refState.height / 768.0f * scale );
+		success = Con_LoadTTFFont( "gfx/fonts/console.ttf", font, px, &con_fontrender );
+	}
+
+	if( success )
+		;
+	else if( con_oldfont.value )
 	{
 		success = Con_LoadVariableWidthFont( "gfx/conchars.fnt", font, scale, &con_fontrender, TF_FONT|TF_NEAREST );
 	}
@@ -621,6 +632,18 @@ static void Con_LoadConchars( void )
 
 	// sets the current font
 	con.curFont = &con.chars[fontSize];
+}
+
+/*
+============================
+Con_GetCodepage
+
+for the TTF rasterizer: which codepage the 256 glyph slots follow
+============================
+*/
+int Con_GetCodepage( void )
+{
+	return g_codepage;
 }
 
 /*
@@ -787,6 +810,7 @@ void Con_Init( void )
 	Cvar_RegisterVariable( &con_charset );
 	Cvar_RegisterVariable( &con_fontscale );
 	Cvar_RegisterVariable( &con_fontrender );
+	Cvar_RegisterVariable( &con_ttffont );
 	Cvar_RegisterVariable( &con_fontnum );
 	Cvar_RegisterVariable( &con_color );
 	Cvar_RegisterVariable( &scr_drawversion );
@@ -2171,7 +2195,7 @@ void Con_RunConsole( void )
 			con.vislines = con.showlines;
 	}
 
-	if( FBitSet( con_charset.flags|con_fontscale.flags|con_fontnum.flags|cl_charset.flags|con_oldfont.flags, FCVAR_CHANGED ))
+	if( FBitSet( con_charset.flags|con_fontscale.flags|con_fontnum.flags|cl_charset.flags|con_oldfont.flags|con_ttffont.flags, FCVAR_CHANGED ))
 	{
 		if( con_fontscale.value < 1.0f )
 			Cvar_DirectSet( &con_fontscale, "1" );
@@ -2198,6 +2222,7 @@ void Con_RunConsole( void )
 		ClearBits( con_fontscale.flags, FCVAR_CHANGED );
 		ClearBits( cl_charset.flags,    FCVAR_CHANGED );
 		ClearBits( con_oldfont.flags,   FCVAR_CHANGED );
+		ClearBits( con_ttffont.flags,   FCVAR_CHANGED );
 	}
 }
 

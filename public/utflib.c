@@ -230,6 +230,20 @@ uint32_t Q_UnicodeToCP1251( uint32_t uc )
 	return '?';
 }
 
+uint32_t Q_CP1251ToUnicode( uint32_t cp )
+{
+	if( cp < 0x80 )
+		return cp;
+
+	if( cp >= 0xC0 && cp <= 0xDF )
+		return cp - 0xC0 + 0x410;
+
+	if( cp >= 0xE0 && cp <= 0xFF )
+		return cp - 0xE0 + 0x430;
+
+	return table_cp1251[cp - 0x80];
+}
+
 uint32_t Q_UnicodeToCP1252( uint32_t uc )
 {
 	// this is NOT valid way to convert Unicode codepoint back to CP1252!!!

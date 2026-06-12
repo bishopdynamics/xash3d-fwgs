@@ -40,5 +40,6 @@ size_t Q_UTF16ToUTF8( char *dst, size_t dstsize, const uint16_t *src, size_t src
 // function to convert Unicode codepoints into CP1251 or CP1252
 uint32_t Q_UnicodeToCP1251( uint32_t uc );
 uint32_t Q_UnicodeToCP1252( uint32_t uc );
+uint32_t Q_CP1251ToUnicode( uint32_t cp );
 
 #endif // UTFLIB_H
