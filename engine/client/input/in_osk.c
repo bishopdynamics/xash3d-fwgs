@@ -541,7 +541,7 @@ void OSK_Draw( void )
 			{ OSK_GLYPH_B, -1, "Done" },
 			{ OSK_GLYPH_START, -1, "Cancel" },
 		};
-		int gh = OSK_LEGEND_H * 0.62f * refState.height;
+		int gh = OSK_LEGEND_H * 0.78f * refState.height;
 		int ly = py + ph - ( OSK_LEGEND_H * refState.height + gh ) / 2;
 		int lx = px + 0.012f * refState.width;
 		size_t k;
