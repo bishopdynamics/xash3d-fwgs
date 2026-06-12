@@ -316,13 +316,14 @@ static qboolean R_Init_Video_( ref_graphic_apis_t type )
 
 	// Continuum unified config: shared renderer settings (RENDERINFO +
 	// GLCONFIG cvars) override the per-game video/renderer configs, right
-	// before video init applies them
+	// before video init applies them. Must NOT run under
+	// host.apply_opengl_config: that mode rejects every non-GLCONFIG cvar,
+	// which silently dropped the resolution lines. The renderer registered
+	// its cvars when its library loaded, so a plain exec sets everything.
 	if( FS_FileExists( "unified_video.cfg", false ))
 	{
-		host.apply_opengl_config = true;
 		Cbuf_AddText( "exec unified_video.cfg\n" );
 		Cbuf_Execute();
-		host.apply_opengl_config = false;
 	}
 
 	return R_Init_Video( type );
