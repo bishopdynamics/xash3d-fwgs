@@ -115,11 +115,24 @@ typedef int qboolean;
 	#endif
 	#define NORETURN           __attribute__(( noreturn ))
 	#define NONNULL            __attribute__(( nonnull ))
-	#define FORMAT_CHECK( x )  __attribute__(( format( printf, x, x + 1 )))
+	// xash3d-streaming: on MinGW a plain printf archetype means ms_printf,
+	// which rejects C99 %zu/%llu even though we build with mingw's ANSI stdio
+	// (__USE_MINGW_ANSI_STDIO) where they work — check against gnu_printf
+	#if defined( __MINGW32__ )
+		#define FORMAT_CHECK( x )  __attribute__(( format( gnu_printf, x, x + 1 )))
+	#else
+		#define FORMAT_CHECK( x )  __attribute__(( format( printf, x, x + 1 )))
+	#endif
 	#define ALLOC_CHECK( x )   __attribute__(( alloc_size( x )))
 	#define WARN_UNUSED_RESULT __attribute__(( warn_unused_result ))
 	#define MAYBE_UNUSED       __attribute__(( unused ))
-	#define RENAME_SYMBOL( x ) asm( x )
+	// xash3d-streaming: on i386 PE targets C symbols carry a leading underscore
+	// but asm() names are literal, so renamed symbols break mingw-ld's DLL
+	// auto-export ("cannot export svs_: symbol not found"); MSVC builds already
+	// run without the renames, so make MinGW match
+	#if !defined( __MINGW32__ )
+		#define RENAME_SYMBOL( x ) asm( x )
+	#endif
 	#if !defined( offsetof )
 		#define offsetof( s, m )   __builtin_offsetof( s, m )
 	#endif // !defined( offsetof )

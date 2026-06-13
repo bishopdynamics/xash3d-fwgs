@@ -271,15 +271,18 @@ Look for a file in the filesystem only
 qboolean FS_SysFileExists( const char *path )
 {
 #if XASH_WIN32
-	struct _stat buf;
-	if( _wstat( FS_PathToWideChar( path ), &buf ) < 0 )
+	// not _wstat: msvcrt.dll's stat family rejects trailing slashes, and the
+	// directory cache probes searchpath roots like "valve/" (UCRT tolerates
+	// them, so MSVC builds never noticed)
+	DWORD attrs = GetFileAttributesW( FS_PathToWideChar( path ));
+	return attrs != INVALID_FILE_ATTRIBUTES && !FBitSet( attrs, FILE_ATTRIBUTE_DIRECTORY );
 #else // !XASH_WIN32
 	struct stat buf;
 	if( stat( path, &buf ) < 0 )
-#endif // !XASH_WIN32
 		return false;
 
 	return S_ISREG( buf.st_mode );
+#endif // !XASH_WIN32
 }
 
 /*
@@ -292,15 +295,16 @@ Look for a existing folder
 qboolean FS_SysFolderExists( const char *path )
 {
 #if XASH_WIN32
-	struct _stat buf;
-	if( _wstat( FS_PathToWideChar( path ), &buf ) < 0 )
+	// see FS_SysFileExists for why this isn't _wstat
+	DWORD attrs = GetFileAttributesW( FS_PathToWideChar( path ));
+	return attrs != INVALID_FILE_ATTRIBUTES && FBitSet( attrs, FILE_ATTRIBUTE_DIRECTORY );
 #else
 	struct stat buf;
 	if( stat( path, &buf ) < 0 )
-#endif
 		return false;
 
 	return S_ISDIR( buf.st_mode );
+#endif
 }
 
 /*
@@ -313,8 +317,8 @@ Check if filesystem entry exists at all, don't mind the type
 qboolean FS_SysFileOrFolderExists( const char *path )
 {
 #if XASH_WIN32
-	struct _stat buf;
-	return _wstat( FS_PathToWideChar( path ), &buf ) >= 0;
+	// see FS_SysFileExists for why this isn't _wstat
+	return GetFileAttributesW( FS_PathToWideChar( path )) != INVALID_FILE_ATTRIBUTES;
 #else
 	struct stat buf;
 	return stat( path, &buf ) >= 0;

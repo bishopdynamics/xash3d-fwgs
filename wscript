@@ -322,6 +322,16 @@ def configure(conf):
 	conf.check_cxx(cxxflags=cxxflags, linkflags=linkflags, msg='Checking for required C++ flags')
 
 	conf.env.append_unique('CFLAGS', cflags)
+	# xash3d-streaming: MinGW cross-builds use mingw's C99 stdio so %zu and
+	# friends work at runtime AND satisfy -Werror=format (gnu_printf semantics)
+	if conf.env.DEST_OS == 'win32' and conf.env.COMPILER_CC != 'msvc':
+		conf.env.append_unique('DEFINES', '__USE_MINGW_ANSI_STDIO=1')
+		# ship without libgcc_s_dw2-1.dll/libstdc++-6.dll/libwinpthread-1.dll;
+		# -static-libstdc++ alone is defeated by waf's trailing -Wl,-Bdynamic
+		# lib marker, so also pull libstdc++ inside the static-lib group
+		conf.env.append_unique('LINKFLAGS', ['-static', '-static-libgcc', '-static-libstdc++'])
+		conf.env.append_unique('STLIB', 'stdc++')
+
 	conf.env.append_unique('CXXFLAGS', cxxflags)
 	conf.env.append_unique('LINKFLAGS', linkflags)
 
