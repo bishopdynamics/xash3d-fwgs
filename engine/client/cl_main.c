@@ -349,6 +349,22 @@ static void CL_CheckClientState( void )
 
 		Con_DPrintf( "client connected at %.2f sec\n", Platform_DoubleTime() - cls.timestart );
 
+		// xash3d-streaming: a seamless level change resets the player's toggle
+		// cheats (god/notarget/noclip), which would otherwise silently turn off
+		// mid-game. The Cheats menu records the desired state in cheat_* cvars;
+		// re-apply them now that the client is back in the world. We fire on
+		// every single-player activation (the save/restore that drives a
+		// transition starts the player with cheats cleared, so this restores
+		// them; on a fresh game cheat_* default to 0, a no-op). Forwarded like
+		// the console commands they mirror.
+		if( cl.maxclients <= 1 && Cvar_VariableInteger( "sv_cheats" ))
+		{
+			if( Cvar_VariableInteger( "cheat_god" ))         CL_ServerCommand( true, "god\n" );
+			if( Cvar_VariableInteger( "cheat_notarget" ))    CL_ServerCommand( true, "notarget\n" );
+			if( Cvar_VariableInteger( "cheat_noclip" ))      CL_ServerCommand( true, "noclip\n" );
+			if( Cvar_VariableInteger( "cheat_thirdperson" )) CL_ServerCommand( true, "thirdperson\n" );
+		}
+
 		if( cl_autorecord.value && !cls.demoplayback )
 		{
 			if( cls.demorecording )

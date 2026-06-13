@@ -32,6 +32,14 @@ CVAR_DEFINE_AUTO( rcon_password, "", FCVAR_PROTECTED | FCVAR_PRIVILEGED, "remote
 CVAR_DEFINE_AUTO( rcon_enable, "1", FCVAR_PROTECTED, "enable accepting remote commands on server" );
 // TODO: CVAR_DEFINE_AUTO( sv_filterban, "1", 0, "filter banned users" );
 CVAR_DEFINE_AUTO( sv_cheats, "0", FCVAR_SERVER, "allow cheats on server" );
+// xash3d-streaming: the Cheats menu records which toggle cheats the player
+// wants on, so they survive a seamless level change. The transition resets
+// god/notarget/noclip, which would otherwise silently turn off mid-game;
+// SV_ChangeLevel re-applies these afterwards.
+CVAR_DEFINE_AUTO( cheat_god, "0", FCVAR_PRIVILEGED, "restore god mode after a level change" );
+CVAR_DEFINE_AUTO( cheat_notarget, "0", FCVAR_PRIVILEGED, "restore notarget after a level change" );
+CVAR_DEFINE_AUTO( cheat_noclip, "0", FCVAR_PRIVILEGED, "restore noclip after a level change" );
+CVAR_DEFINE_AUTO( cheat_thirdperson, "0", FCVAR_PRIVILEGED, "restore third-person camera after a level change" );
 CVAR_DEFINE_AUTO( sv_instancedbaseline, "1", 0, "allow to use instanced baselines to saves network overhead" );
 static CVAR_DEFINE_AUTO( sv_contact, "", FCVAR_ARCHIVE|FCVAR_SERVER, "server techincal support contact address or web-page" );
 CVAR_DEFINE_AUTO( sv_minupdaterate, "10.0", FCVAR_ARCHIVE, "minimal value for 'cl_updaterate' window, 0 == unlimited" );
@@ -879,6 +887,10 @@ void SV_Init( void )
 	Cvar_RegisterVariable( &sv_minrate );
 	Cvar_RegisterVariable( &sv_maxrate );
 	Cvar_RegisterVariable( &sv_cheats );
+	Cvar_RegisterVariable( &cheat_god );
+	Cvar_RegisterVariable( &cheat_notarget );
+	Cvar_RegisterVariable( &cheat_noclip );
+	Cvar_RegisterVariable( &cheat_thirdperson );
 	Cvar_RegisterVariable( &sv_airmove );
 #if !XASH_DEDICATED
 	Cvar_RegisterVariable( &sv_fps );
