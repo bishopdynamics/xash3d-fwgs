@@ -390,6 +390,12 @@ void R_AOEntityContact( const vec3_t floor, const vec3_t origin, const vec3_t an
 void R_AOStampBegin( int *size );
 void R_AOStampTri( const float a[2], const float b[2], const float c[2], float wa, float wb, float wc );
 void R_AOStampProject( float minx, float miny, float maxx, float maxy, float floorz, float alpha, int blur );
+byte *R_AOWorldMap( const msurface_t *surf );	// baked per-surface occlusion (NULL if none)
+float R_AOWorldStrength( void );
+float R_AOWorldMax( void );	// occlusion clamp (tight gaps can't slam to black)
+void R_AOWorldInvalidate( void );	// drop the baked layer on map (re)build
+void R_AOBakeWorld( void );		// bake world AO for the current map + apply
+void R_AOWorldFrame( void );		// per-frame: auto-bake the current map when world AO is on
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
 void GL_SetupFogColorForSurfaces( void );
 void R_DrawAlphaTextureChains( void );

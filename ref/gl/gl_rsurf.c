@@ -757,29 +757,56 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 	if( surf->dlightframe == tr.framecount && dynamic )
 		R_AddDynamicLights( surf );
 
+	// xash3d-streaming: baked world AO. A per-surface occlusion layer (R_AOWorldMap)
+	// multiplies into each lit texel - or, with r_ao_debug, replaces it with magenta
+	// so the bake can be verified. Kept off the BSP data, so strength is a live tweak.
+	const byte *aomap = R_AOWorldMap( surf );
+	const float ao_str = R_AOWorldStrength();
+	const float ao_max = R_AOWorldMax();
+	const qboolean ao_dbg = R_AODebugActive();
+	const qboolean ao_on = ( aomap && ( ao_str > 0.0f || ao_dbg ));
+
 	for( int t = 0; t < tmax; t++ )
 	{
 		for( int s = 0; s < smax; s++ )
 		{
 			const uint *bl = &r_blocklights[(s + (t * smax)) * 3];
 			byte *dst = &dest[(t * stride) + (s * 4)];
+			float aofac = 1.0f;
+
+			if( ao_on )
+			{
+				float occ = aomap[t * smax + s] * ( 1.0f / 255.0f );
+
+				if( ao_dbg )
+				{
+					byte mv = (byte)( occ * 255.0f );	// magenta = raw occlusion (un-clamped)
+					dst[0] = mv; dst[1] = 0; dst[2] = mv; dst[3] = 255;
+					continue;
+				}
+				if( occ > ao_max ) occ = ao_max;	// clamp so tight gaps don't go black
+				aofac = 1.0f - occ * ao_str;
+				if( aofac < 0.0f ) aofac = 0.0f;
+			}
 
 			for( int i = 0; i < 3; i++ )
 			{
-				int t = bl[i] * lightscale >> 14;
+				int val = bl[i] * lightscale >> 14;
 
 				// amp up water lightmap to avoid too dark water
 				// when the it wasn't properly lit by the level designer
 				if( FBitSet( surf->flags, SURF_DRAWTURB ))
 				{
-					float ft = t * litwater_scale;
-					t = Q_max( Q_rint( ft ), litwater_minlight );
+					float ft = val * litwater_scale;
+					val = Q_max( Q_rint( ft ), litwater_minlight );
 				}
 
-				if( t > 1023 )
-					t = 1023;
+				val = (int)( val * aofac );	// baked AO darkening
 
-				dst[i] = LightToTexGamma( t ) >> 2;
+				if( val > 1023 )
+					val = 1023;
+
+				dst[i] = LightToTexGamma( val ) >> 2;
 			}
 			dst[3] = 255;
 		}
@@ -4001,6 +4028,8 @@ with all the surfaces from all brush models
 void GL_BuildLightmaps( void )
 {
 	int	nColinElim = 0;
+
+	R_AOWorldInvalidate();	// drop any baked world-AO layer for the previous map
 
 	// release old lightmaps
 	for( int i = 0; i < MAX_LIGHTMAPS; i++ )

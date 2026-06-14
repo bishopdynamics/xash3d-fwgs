@@ -954,6 +954,9 @@ void R_RenderScene( void )
 	// begin a new frame
 	tr.framecount++;
 
+	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+		R_AOWorldFrame();	// auto-bake world AO for this map (before the world is drawn)
+
 	tr.dlightframecount = R_PushDlights( WORLDMODEL, tr.framecount );
 
 	R_SetupFrustum();

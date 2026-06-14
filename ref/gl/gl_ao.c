@@ -35,8 +35,9 @@ built phase by phase:
 
 #include "gl_local.h"
 #include "xash3d_mathlib.h"
+#include "pm_defs.h"	// PM_WORLD_ONLY for the world-AO occlusion rays
 
-CVAR_DEFINE_AUTO( r_ao, "0", FCVAR_ARCHIVE, "ambient occlusion: 0 off, 1 world-space (\"real\")" );
+CVAR_DEFINE_AUTO( r_ao, "1", FCVAR_ARCHIVE, "ambient occlusion: 0 off, 1 world-space (\"real\")" );
 CVAR_DEFINE_AUTO( r_ao_strength, "0.5", FCVAR_ARCHIVE, "contact-AO darkness under entities (0..1)" );
 CVAR_DEFINE_AUTO( r_ao_size, "1.1", FCVAR_ARCHIVE, "contact-AO footprint scale vs the model bbox" );
 CVAR_DEFINE_AUTO( r_ao_fade, "72", FCVAR_ARCHIVE, "height (units) over the floor at which the contact AO fully fades out" );
@@ -44,6 +45,9 @@ CVAR_DEFINE_AUTO( r_ao_silhouette, "1", FCVAR_ARCHIVE, "contact AO shape: 1 = pr
 CVAR_DEFINE_AUTO( r_ao_soft, "2", FCVAR_ARCHIVE, "silhouette penumbra width in units (edge softness); 0 = hard edge" );
 CVAR_DEFINE_AUTO( r_ao_height, "16", FCVAR_ARCHIVE, "contact height falloff: model parts at the floor cast fully, fading to nothing this many units up (feet > legs > arms)" );
 CVAR_DEFINE_AUTO( r_ao_debug, "0", 0, "debug: draw contact-AO footprints as solid magenta (no depth/blend), bypassing the normal gates" );
+CVAR_DEFINE_AUTO( r_ao_world, "0.8", FCVAR_ARCHIVE, "baked world AO strength (0 = off .. 1); auto-bakes per map when > 0" );
+CVAR_DEFINE_AUTO( r_ao_world_dist, "72", FCVAR_ARCHIVE, "world-AO occlusion ray length in units (bake quality; re-bake after changing)" );
+CVAR_DEFINE_AUTO( r_ao_world_max, "0.6", FCVAR_ARCHIVE, "world-AO max occlusion (0..1): caps how dark a surface can get so tight gaps don't slam to black. live - no re-bake" );
 
 #define AO_DISC_SIZE	64
 
@@ -103,6 +107,8 @@ static void R_AOMakeDisc( void )
 	Mem_Free( data );
 }
 
+static void R_AOBakeWorld_f( void );
+
 void R_InitAO( void )
 {
 	gEngfuncs.Cvar_RegisterVariable( &r_ao );
@@ -113,6 +119,10 @@ void R_InitAO( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_soft );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_height );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_debug );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_world );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_dist );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_max );
+	gEngfuncs.Cmd_AddCommand( "r_ao_bake", R_AOBakeWorld_f, "bake world AO into a per-surface layer and apply it to the lightmaps" );
 }
 
 float R_AOSoftRadius( void )
@@ -460,4 +470,262 @@ void R_AOStampProject( float minx, float miny, float maxx, float maxy, float flo
 	pglDepthMask( GL_TRUE );
 	pglDisable( GL_BLEND );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+}
+
+/*
+=================
+Phase 2 (in progress) - baked world AO
+
+Per-luxel occlusion baked against the BSP and kept as its own per-surface layer
+(NOT folded into the BSP lightmap data, so strength stays a live tweak and the
+original lighting is never destroyed). The luxel world position is recovered by
+inverting the engine's luxel<->world map (lmvecs + lightmapmins + the surface
+plane); a small hemisphere of world-only rays, proximity-weighted so nearby
+geometry counts more, gives the occlusion. r_ao_bake fills the layer then rebuilds
+the lightmaps; R_BuildLightMap (gl_rsurf.c) multiplies it into each lit texel, or
+shows it as magenta when r_ao_debug is set. Caching + preload integration next.
+=================
+*/
+#define AO_WORLD_RAYS	13
+
+// hemisphere kernel in tangent space (+Z = surface normal): centre + two rings
+static const float ao_world_kernel[AO_WORLD_RAYS][3] =
+{
+	{  0.000f,  0.000f, 1.00f },
+	{  0.714f,  0.000f, 0.70f }, {  0.357f,  0.618f, 0.70f }, { -0.357f,  0.618f, 0.70f },
+	{ -0.714f,  0.000f, 0.70f }, { -0.357f, -0.618f, 0.70f }, {  0.357f, -0.618f, 0.70f },
+	{  0.811f,  0.468f, 0.35f }, {  0.000f,  0.937f, 0.35f }, { -0.811f,  0.468f, 0.35f },
+	{ -0.811f, -0.468f, 0.35f }, {  0.000f, -0.937f, 0.35f }, {  0.811f, -0.468f, 0.35f },
+};
+
+// Baked AO is stored ON each surface (info->shadowmap) - NOT in a surface-index
+// array. The streaming build shares one lightmap atlas across every preloaded map,
+// so R_BuildLightMap runs over surfaces from OTHER maps too; an index like
+// (surf - WORLDMODEL->surfaces) is garbage for those and bled one map's AO onto
+// another's geometry (floating shadows after a transition). A per-surface pointer
+// can't be confused: a surface we didn't bake simply has NULL. ao_bufs only tracks
+// our allocations for freeing; ao_baked_model gates the layer to the baked map.
+static byte	**ao_bufs = NULL;
+static int	ao_bufcount = 0;
+static model_t	*ao_baked_model = NULL;
+
+float R_AOWorldStrength( void )
+{
+	return r_ao_world.value;
+}
+
+float R_AOWorldMax( void )
+{
+	return bound( 0.0f, r_ao_world_max.value, 1.0f );
+}
+
+// occlusion bytes for a surface, or NULL if not baked (or baked for another map)
+byte *R_AOWorldMap( const msurface_t *surf )
+{
+	if( !ao_baked_model || WORLDMODEL != ao_baked_model || !surf->info )
+		return NULL;
+	return surf->info->shadowmap;
+}
+
+static void R_AOWorldFree( void )
+{
+	int i;
+
+	if( ao_bufs )
+	{
+		for( i = 0; i < ao_bufcount; i++ )
+			if( ao_bufs[i] ) Mem_Free( ao_bufs[i] );
+		Mem_Free( ao_bufs );
+	}
+	ao_bufs = NULL;
+	ao_bufcount = 0;
+	ao_baked_model = NULL;
+}
+
+// called when the lightmaps are (re)built for a new map, so a previous map's bake
+// is never applied to different geometry
+void R_AOWorldInvalidate( void )
+{
+	R_AOWorldFree();
+}
+
+static float R_AOWorldOcclusion( const vec3_t p, const vec3_t n )
+{
+	vec3_t tang, bitang, up, src;
+	float dist = Q_max( 8.0f, r_ao_world_dist.value );
+	float sum = 0.0f;
+	int i;
+
+	// tangent basis around the surface normal
+	if( fabs( n[2] ) < 0.9f ) VectorSet( up, 0.0f, 0.0f, 1.0f );
+	else VectorSet( up, 1.0f, 0.0f, 0.0f );
+	CrossProduct( up, n, tang );
+	VectorNormalize( tang );
+	CrossProduct( n, tang, bitang );
+
+	VectorMA( p, 2.0f, n, src );	// lift off the surface to avoid self-hits
+
+	for( i = 0; i < AO_WORLD_RAYS; i++ )
+	{
+		const float *k = ao_world_kernel[i];
+		vec3_t dir, end;
+		pmtrace_t trace;
+
+		dir[0] = k[0] * tang[0] + k[1] * bitang[0] + k[2] * n[0];
+		dir[1] = k[0] * tang[1] + k[1] * bitang[1] + k[2] * n[1];
+		dir[2] = k[0] * tang[2] + k[1] * bitang[2] + k[2] * n[2];
+		VectorMA( src, dist, dir, end );
+
+		trace = gEngfuncs.CL_TraceLine( src, end, PM_WORLD_ONLY );
+
+		// the luxel is buried inside solid (e.g. a face inside the world, or a corner
+		// where the lift pushed it through a wall). Every ray would startsolid -> a
+		// black patch. Bail with a sentinel so the caller leaves it unlit instead.
+		if( trace.startsolid || trace.allsolid )
+			return -1.0f;
+
+		// proximity-weighted: a close hit occludes fully, a far one barely - this
+		// concentrates the AO in corners and keeps big open rooms from going grey.
+		if( trace.fraction < 1.0f )
+			sum += 1.0f - trace.fraction;
+	}
+
+	return sum / (float)AO_WORLD_RAYS;
+}
+
+void R_AOBakeWorld( void )
+{
+	model_t *world = WORLDMODEL;
+	double t0 = gEngfuncs.pfnTime();
+	int i, nsurf = 0, nlux = 0;
+
+	if( !world )
+	{
+		gEngfuncs.Con_Printf( "r_ao_bake: no world loaded\n" );
+		return;
+	}
+
+	// clear any previous AO pointers on this world's surfaces (NULL first so freeing
+	// the old buffers below never leaves a dangling shadowmap), then free them.
+	for( i = 0; i < world->numsurfaces; i++ )
+		if( world->surfaces[i].info ) world->surfaces[i].info->shadowmap = NULL;
+
+	R_AOWorldFree();
+	ao_bufcount = world->numsurfaces;
+	ao_bufs = Mem_Malloc( r_temppool, ao_bufcount * sizeof( byte * ));
+	memset( ao_bufs, 0, ao_bufcount * sizeof( byte * ));
+
+	for( i = world->firstmodelsurface; i < world->firstmodelsurface + world->nummodelsurfaces; i++ )
+	{
+		msurface_t *surf = &world->surfaces[i];
+		mextrasurf_t *info = surf->info;
+		int sample_size, smax, tmax, si, ti;
+		float r0[3], r1[3], cc0[3], cc1[3], cc2[3], det, inv, pd;
+		vec3_t n;
+		byte *occmap;
+
+		if( !surf->samples || FBitSet( surf->flags, SURF_DRAWSKY | SURF_DRAWTURB | SURF_DRAWTURB_QUADS | SURF_DRAWTILED ))
+			continue;
+
+		sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
+		smax = ( info->lightextents[0] / sample_size ) + 1;
+		tmax = ( info->lightextents[1] / sample_size ) + 1;
+		if( smax < 1 || tmax < 1 )
+			continue;
+
+		// outward normal + plane constant (dot(P,n) = pd holds either way)
+		VectorCopy( surf->plane->normal, n );
+		pd = surf->plane->dist;
+		if( FBitSet( surf->flags, SURF_PLANEBACK )) { VectorNegate( n, n ); pd = -pd; }
+
+		// inverse of A = [ lmvecs0 ; lmvecs1 ; n ] (rows) via cross products
+		VectorCopy( info->lmvecs[0], r0 );
+		VectorCopy( info->lmvecs[1], r1 );
+		CrossProduct( r1, n, cc0 );
+		CrossProduct( n, r0, cc1 );
+		CrossProduct( r0, r1, cc2 );
+		det = DotProduct( r0, cc0 );
+		if( fabs( det ) < 1.0e-9f )
+			continue;
+		inv = 1.0f / det;
+
+		occmap = Mem_Malloc( r_temppool, smax * tmax );
+
+		int buried = 0;
+		for( ti = 0; ti < tmax; ti++ )
+		{
+			for( si = 0; si < smax; si++ )
+			{
+				float b0 = ( info->lightmapmins[0] + si * sample_size ) - info->lmvecs[0][3];
+				float b1 = ( info->lightmapmins[1] + ti * sample_size ) - info->lmvecs[1][3];
+				vec3_t p;
+				float occ;
+
+				p[0] = ( b0 * cc0[0] + b1 * cc1[0] + pd * cc2[0] ) * inv;
+				p[1] = ( b0 * cc0[1] + b1 * cc1[1] + pd * cc2[1] ) * inv;
+				p[2] = ( b0 * cc0[2] + b1 * cc1[2] + pd * cc2[2] ) * inv;
+
+				occ = R_AOWorldOcclusion( p, n );
+				if( occ < 0.0f ) { occ = 0.0f; buried++; }	// buried luxel -> leave unlit
+				occmap[ti * smax + si] = (byte)( bound( 0.0f, occ, 1.0f ) * 255.0f );
+				nlux++;
+			}
+		}
+
+		// diagnostic: a surface that's mostly buried isn't a real visible face
+		if( r_ao_debug.value && buried > ( smax * tmax ) / 2 )
+		{
+			texture_t *tx = surf->texinfo ? surf->texinfo->texture : NULL;
+			gEngfuncs.Con_Printf( "  [AO] buried surf #%i tex='%s' flags=0x%x (%i/%i luxels)\n",
+				i, tx ? tx->name : "?", surf->flags, buried, smax * tmax );
+		}
+
+		surf->info->shadowmap = occmap;	// per-surface: can't bleed onto other maps
+		ao_bufs[i] = occmap;		// tracked for freeing
+		nsurf++;
+	}
+
+	ao_baked_model = world;
+
+	GL_RebuildLightmaps();	// re-run R_BuildLightMap so the AO layer is applied
+
+	gEngfuncs.Con_Printf( "r_ao_bake: %i surfaces, %i luxels in %.2f s\n",
+		nsurf, nlux, gEngfuncs.pfnTime() - t0 );
+}
+
+static void R_AOBakeWorld_f( void )
+{
+	R_AOBakeWorld();
+}
+
+/*
+=================
+R_AOWorldFrame
+
+Auto-bake world AO the first time we're standing in a map with it enabled. Called
+once per frame for the main view. A short delay after the world changes lets the
+player spawn and the trace world come up before we cast occlusion rays. This is a
+stop-gap for testing (a per-map hitch); the real path is the preload bake.
+=================
+*/
+void R_AOWorldFrame( void )
+{
+	static model_t *seen = NULL;
+	static int bakeframe = 0;
+
+	if( r_ao_world.value <= 0.0f || !WORLDMODEL )
+		return;
+	if( WORLDMODEL == ao_baked_model )
+		return;	// already baked this map
+
+	if( WORLDMODEL != seen )
+	{
+		seen = WORLDMODEL;
+		bakeframe = tr.framecount + 30;	// ~0.5s: let the map go live so traces work
+		return;
+	}
+	if( tr.framecount < bakeframe )
+		return;
+
+	R_AOBakeWorld();
 }
