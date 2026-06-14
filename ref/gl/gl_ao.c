@@ -511,6 +511,8 @@ static model_t	*ao_baked_model = NULL;
 
 float R_AOWorldStrength( void )
 {
+	if( r_ao.value < 1.0f )
+		return 0.0f;	// master "Ambient Occlusion" toggle gates world AO too
 	return r_ao_world.value;
 }
 
@@ -712,8 +714,21 @@ void R_AOWorldFrame( void )
 {
 	static model_t *seen = NULL;
 	static int bakeframe = 0;
+	static float l_ao = -1.0f, l_world = -1.0f, l_max = -1.0f, l_dbg = -1.0f;
 
-	if( r_ao_world.value <= 0.0f || !WORLDMODEL )
+	// Re-apply the baked layer live when an apply-time knob changes - the master
+	// toggle, world strength, the clamp, or debug. No re-bake needed for these, so
+	// turning AO on/off from the menu (or sliding strength) is instant.
+	if( r_ao.value != l_ao || r_ao_world.value != l_world || r_ao_world_max.value != l_max || r_ao_debug.value != l_dbg )
+	{
+		l_ao = r_ao.value; l_world = r_ao_world.value;
+		l_max = r_ao_world_max.value; l_dbg = r_ao_debug.value;
+		if( ao_baked_model == WORLDMODEL )
+			GL_RebuildLightmaps();
+	}
+
+	// auto-bake when the master AO toggle and world AO are both on for this map
+	if( r_ao.value < 1.0f || r_ao_world.value <= 0.0f || !WORLDMODEL )
 		return;
 	if( WORLDMODEL == ao_baked_model )
 		return;	// already baked this map
