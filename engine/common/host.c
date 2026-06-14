@@ -1230,6 +1230,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		FCVAR_READ_ONLY, "indicates if engine was compiled with extended msurface_t struct" );
 
 	Mod_Init();
+	Host_InitAOBake();	// register r_ao_world_dist + bake commands before configs run
 	NET_Init();
 	NET_InitMasters();
 	Netchan_Init();
@@ -1307,6 +1308,12 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 			Cbuf_AddText( "exec localconfig.cfg\n" );
 			Cbuf_Execute();
 		}
+
+		// xash3d-streaming: bake any missing world-AO caches for the campaign
+		// (first launch with a game bakes them all). Runs before the preload
+		// below and independent of streaming, so the per-map raycast hitch is
+		// gone and toggling AO on later needs no bake.
+		Host_AutoBakeAO();
 
 		// xash3d-streaming: warm the residency cache for the whole campaign.
 		// Runs after the configs above have decided host_level_streaming.

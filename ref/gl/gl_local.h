@@ -394,8 +394,7 @@ byte *R_AOWorldMap( const msurface_t *surf );	// baked per-surface occlusion (NU
 float R_AOWorldStrength( void );
 float R_AOWorldMax( void );	// occlusion clamp (tight gaps can't slam to black)
 void R_AOWorldInvalidate( void );	// drop the baked layer on map (re)build
-void R_AOBakeWorld( void );		// bake world AO for the current map + apply
-void R_AOWorldFrame( void );		// per-frame: auto-bake the current map when world AO is on
+void R_AOWorldFrame( void );		// per-frame: load the current map's baked AO cache when world AO is on
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
 void GL_SetupFogColorForSurfaces( void );
 void R_DrawAlphaTextureChains( void );

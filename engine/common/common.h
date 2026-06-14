@@ -577,6 +577,8 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 void Host_EndGame( qboolean abort, const char *message, ... ) FORMAT_CHECK( 2 );
 void Host_AbortCurrentFrame( void ) NORETURN;
 void Host_QueueStreamPreload( void );
+void Host_InitAOBake( void );
+void Host_AutoBakeAO( void );
 void Host_WriteServerConfig( const char *name );
 void Host_WriteOpenGLConfig( void );
 void Host_WriteVideoConfig( void );
