@@ -555,6 +555,16 @@ static qboolean Mod_CacheCurrentWorld( void )
 	world.compressed_phs = NULL;
 	world.phsofs = NULL;
 
+	// message/compiler/generator/wadlist are host.mempool allocations that were
+	// snapshotted into wc->worldstate above. Drop the live aliases so the next
+	// world load's Mem_Free (Mod_LoadEntities) frees only fresh data and can
+	// never dangle the cached copies - the cache entry solely owns them now.
+	world.message = NULL;
+	world.compiler = NULL;
+	world.generator = NULL;
+	world.wadlist = NULL;
+	world.wadcount = 0;
+
 	return true;
 }
 
@@ -621,7 +631,22 @@ static void Mod_FreeCachedWorlds( void )
 			world.hull_models = NULL;
 			world.compressed_phs = NULL;
 			world.phsofs = NULL;
+
+			// the active world aliases this entry's host.mempool strings
+			// (restored from it); null the live copies before we free them
+			// below so we never double-free or leave a dangling world.message.
+			world.message = NULL;
+			world.compiler = NULL;
+			world.generator = NULL;
+			world.wadlist = NULL;
+			world.wadcount = 0;
 		}
+
+		// release the host.mempool strings this cache entry owns
+		Mem_Free( wc->worldstate.message );
+		Mem_Free( wc->worldstate.compiler );
+		Mem_Free( wc->worldstate.generator );
+		Mem_Free( wc->worldstate.wadlist );
 
 		Mem_FreePool( &wc->world.mempool );
 		if( wc->submodels )
