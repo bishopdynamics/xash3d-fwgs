@@ -138,6 +138,11 @@ float R_AOContactHeight( void )
 	return Q_max( 1.0f, r_ao_height.value );
 }
 
+float R_AOGroundDot( void )
+{
+	return bound( 0.0f, r_ao_ground_dot.value, 1.0f );
+}
+
 qboolean R_AOContactActive( void )
 {
 	return ( r_ao.value >= 1.0f ) && ( r_ao_strength.value > 0.0f );

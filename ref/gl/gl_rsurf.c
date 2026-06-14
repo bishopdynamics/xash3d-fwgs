@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include "gl_local.h"
 #include "xash3d_mathlib.h"
 #include "mod_local.h"
+#include "pm_defs.h"	// PM_WORLD_ONLY for the contact-AO floor trace
 #include "atlas.h"
 
 #define TURBSCALE		( 256.0f / ( M_PI2 ))
@@ -1844,9 +1845,12 @@ xash3d-streaming: soft contact-AO footprint under an opaque brush entity (crate,
 breakable, door, func_wall...). Same CPU stamp as studio models: rasterize the
 model's faces - projected straight DOWN, height-weighted so parts near the floor
 contribute most - then blur + lay on the floor. The floor is found by tracing
-down (R_LightVec), and the height falloff self-limits it: anything not resting on
-a floor (door mid-wall, raised platform) traces to a distant floor and fades to
-nothing. Faces are model-local, so they're CPU-transformed to world here.
+down WORLD-ONLY, so a brush prop grounds on the static world and never on other
+brush entities: otherwise a moving sibling (a blast door's sliding locking rods)
+intercepts the trace and the shadow climbs up the machinery. The height falloff
+self-limits it: anything not resting on a floor (door mid-wall, raised platform)
+traces to a distant floor and fades to nothing. Faces are model-local, so they're
+CPU-transformed to world here.
 =================
 */
 static void R_DrawBrushAOStamp( cl_entity_t *e )
@@ -1879,12 +1883,20 @@ static void R_DrawBrushAOStamp( cl_entity_t *e )
 		VectorAdd( e->origin, m->maxs, wmaxs );
 	}
 
-	// trace down through the entity to the floor under it
+	// trace down to the floor under the prop. WORLD-ONLY (not R_LightVec, which also
+	// reads brush entities): a brush prop must ground on the static world, never on a
+	// moving sibling - otherwise a blast door's sliding rods catch the trace and the
+	// shadow climbs the machinery. No trusted, roughly-flat world floor under it -> skip.
 	VectorAverage( wmins, wmaxs, center );
 	VectorSet( top, center[0], center[1], wmaxs[2] + 8.0f );
 	VectorSet( bot, center[0], center[1], wmins[2] - 4096.0f );
-	R_LightVec( top, bot, lspot, NULL );
-	floorz = lspot[2];
+	{
+		pmtrace_t tr = gEngfuncs.CL_TraceLine( top, bot, PM_WORLD_ONLY );
+		if( tr.fraction >= 1.0f || tr.plane.normal[2] < R_AOGroundDot( ))
+			return;
+		floorz = tr.endpos[2];
+		VectorSet( lspot, center[0], center[1], floorz );
+	}
 
 	// peak darkness: strength faded by how far the bottom sits above the floor
 	alpha = R_AOContactAlpha( lspot, wmins, vec3_origin );
