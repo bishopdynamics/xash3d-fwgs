@@ -1639,7 +1639,11 @@ void CL_ClearState( void )
 
 	Cvar_SetValue( "scr_download", -1.0f );
 	Cvar_SetValue( "scr_loading", 0.0f );
-	host.allow_console = host.allow_console_init;
+	// xash3d-streaming: this clear runs on every connect/map load. Resetting to
+	// allow_console_init alone re-disabled the console after loading a map for
+	// normal launches (no -console/-dev) even when the con_enable toggle was on,
+	// until the user toggled it again. Honor con_enable here so the toggle sticks.
+	host.allow_console = host.allow_console_init || Cvar_VariableInteger( "con_enable" ) != 0;
 	HTTP_ClearCustomServers();
 }
 

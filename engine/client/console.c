@@ -2198,17 +2198,22 @@ void Con_RunConsole( void )
 	}
 
 	// xash3d-streaming: the Enable Console toggle governs sessions that were
-	// not already blessed by -console/-dev (those always keep the console)
-	if( FBitSet( con_enable.flags, FCVAR_CHANGED ))
+	// not already blessed by -console/-dev (those always keep the console). Sync
+	// host.allow_console to con_enable every frame whenever they differ — not just
+	// on FCVAR_CHANGED — so the setting is applied at startup and survives map and
+	// savegame loads (CL_ClearState used to reset it), instead of only taking
+	// effect when the cvar is actively toggled.
+	if( !host.allow_console_init )
 	{
-		ClearBits( con_enable.flags, FCVAR_CHANGED );
+		qboolean want_console = con_enable.value != 0.0f;
 
-		if( !host.allow_console_init )
+		if( host.allow_console != want_console )
 		{
-			host.allow_console = con_enable.value != 0.0f;
+			host.allow_console = want_console;
+			ClearBits( con_enable.flags, FCVAR_CHANGED );
 
 			// it just got disabled while open: close it like the toggle key would
-			if( !host.allow_console && cls.key_dest == key_console )
+			if( !want_console && cls.key_dest == key_console )
 				UI_SetActiveMenu( cls.state != ca_active );
 
 			// the conback was picked at vid init while the console was still
