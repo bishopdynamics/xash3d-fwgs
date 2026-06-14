@@ -1915,9 +1915,8 @@ the AO module to box-blur and lay on the floor. Genuinely soft (texture-space
 blur). Uses bodypart 0 (the main body); called once per entity.
 ===============
 */
-static void R_StudioStampAO( float alpha )
+static void R_StudioStampAO( float floorz, float alpha )
 {
-	float floorz = g_studio.lightspot[2];
 	float invh = 1.0f / R_AOContactHeight();	// height falloff: 1 at floor -> 0 at the height
 	float minx = 1.0e9f, miny = 1.0e9f, maxx = -1.0e9f, maxy = -1.0e9f;
 	float margin, sx, sy;
@@ -1987,6 +1986,51 @@ static void R_StudioStampAO( float alpha )
 	if( blur > size / 3 ) blur = size / 3;
 
 	R_AOStampProject( minx, miny, maxx, maxy, floorz, alpha, blur );
+}
+
+/*
+===============
+R_AOStudioContact
+
+xash3d-streaming: a low-biased XY centroid of the current submodel's posed verts,
+plus the lowest vert as the contact height - the point under the model's actual
+resting MASS, used to trace for the ground instead of the entity origin (which can
+sit far from the posed body, e.g. a scientist whose origin is out over a desk, so a
+straight-down trace from origin lands the shadow on the desk). Weighting toward the
+lowest verts pulls the XY onto the real contact (a seated body's legs/seat) rather
+than the average of its whole sprawled silhouette. Reads bodypart 0's posed verts
+(g_studio.verts), valid on the first call this frame.
+===============
+*/
+static qboolean R_AOStudioContact( vec3_t out_contact )
+{
+	int n = m_pSubModel ? m_pSubModel->numverts : 0;
+	float minz = 1.0e9f, span, wsum = 0.0f, cx = 0.0f, cy = 0.0f;
+	int i;
+
+	if( n < 3 )
+		return false;
+
+	for( i = 0; i < n; i++ )
+		if( g_studio.verts[i][2] < minz ) minz = g_studio.verts[i][2];
+
+	// low-bias span: verts within R_AOContactHeight of the lowest point dominate
+	span = R_AOContactHeight();
+	for( i = 0; i < n; i++ )
+	{
+		float w = 1.0f - ( g_studio.verts[i][2] - minz ) / span;
+		if( w <= 0.0f ) continue;
+		cx += g_studio.verts[i][0] * w;
+		cy += g_studio.verts[i][1] * w;
+		wsum += w;
+	}
+	if( wsum <= 0.0f )
+		return false;	// shouldn't happen (lowest vert has w=1), but stay safe
+
+	out_contact[0] = cx / wsum;
+	out_contact[1] = cy / wsum;
+	out_contact[2] = minz;
+	return true;
 }
 
 /*
@@ -2268,14 +2312,23 @@ static void R_StudioDrawPoints( void )
 
 		if( RI.currententity != ao_last_ent || tr.framecount != ao_last_frame )
 		{
+			vec3_t ao_contact, ao_floor;
+
 			ao_last_ent = RI.currententity;
 			ao_last_frame = tr.framecount;
 
-			if( R_AOSilhouette( ))
-				R_StudioStampAO( R_AOContactAlpha( g_studio.lightspot, RI.currententity->origin, RI.currentmodel->mins ));
-			else
-				R_AOEntityContact( g_studio.lightspot, RI.currententity->origin,
-					RI.currententity->angles, RI.currentmodel->mins, RI.currentmodel->maxs );
+			// trace for the floor from under the body's actual resting mass (a low-biased
+			// centroid of the posed verts), not the entity origin which can sit far off
+			// the geometry. Brush-entity-aware; if no floor is confidently found, skip AO
+			// rather than float a blob.
+			if( R_AOStudioContact( ao_contact ) && R_AOGroundTrace( ao_contact, ao_floor ))
+			{
+				if( R_AOSilhouette( ))
+					R_StudioStampAO( ao_floor[2], R_AOContactAlpha( ao_floor, RI.currententity->origin, RI.currentmodel->mins ));
+				else
+					R_AOEntityContact( ao_floor, RI.currententity->origin,
+						RI.currententity->angles, RI.currentmodel->mins, RI.currentmodel->maxs );
+			}
 		}
 	}
 }

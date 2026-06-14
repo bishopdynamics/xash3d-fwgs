@@ -385,6 +385,7 @@ qboolean R_AODebugActive( void );
 qboolean R_AOSilhouette( void );
 float R_AOSoftRadius( void );
 float R_AOContactHeight( void );
+qboolean R_AOGroundTrace( const vec3_t contact, vec3_t out_floor );	// confident ground under a posed-mass contact point (brush-entity aware); false -> skip AO
 float R_AOContactAlpha( const vec3_t floor, const vec3_t origin, const vec3_t mins );
 void R_AOEntityContact( const vec3_t floor, const vec3_t origin, const vec3_t angles, const vec3_t mins, const vec3_t maxs );
 void R_AOStampBegin( int *size );

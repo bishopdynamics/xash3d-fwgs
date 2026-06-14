@@ -37,6 +37,7 @@ built phase by phase:
 
 #include "gl_local.h"
 #include "xash3d_mathlib.h"
+#include "pm_defs.h"	// PM_STUDIO_IGNORE etc. for the contact-AO ground trace
 #include "ao_cache.h"	// baked world-AO cache format (written by host_aobake.c)
 
 CVAR_DEFINE_AUTO( r_ao, "1", FCVAR_ARCHIVE, "ambient occlusion: 0 off, 1 world-space (\"real\")" );
@@ -46,6 +47,7 @@ CVAR_DEFINE_AUTO( r_ao_fade, "72", FCVAR_ARCHIVE, "height (units) over the floor
 CVAR_DEFINE_AUTO( r_ao_silhouette, "1", FCVAR_ARCHIVE, "contact AO shape: 1 = projected model silhouette, 0 = soft blob" );
 CVAR_DEFINE_AUTO( r_ao_soft, "2", FCVAR_ARCHIVE, "silhouette penumbra width in units (edge softness); 0 = hard edge" );
 CVAR_DEFINE_AUTO( r_ao_height, "16", FCVAR_ARCHIVE, "contact height falloff: model parts at the floor cast fully, fading to nothing this many units up (feet > legs > arms)" );
+CVAR_DEFINE_AUTO( r_ao_ground_dot, "0.7", FCVAR_ARCHIVE, "contact-AO ground confidence: minimum upward floor-normal (0..1); a steeper hit is treated as not-a-floor and AO is skipped rather than floated" );
 CVAR_DEFINE_AUTO( r_ao_debug, "0", 0, "debug: draw contact-AO footprints as solid magenta (no depth/blend), bypassing the normal gates" );
 CVAR_DEFINE_AUTO( r_ao_world, "0.8", FCVAR_ARCHIVE, "baked world AO strength (0 = off .. 1)" );
 CVAR_DEFINE_AUTO( r_ao_world_max, "0.6", FCVAR_ARCHIVE, "world-AO max occlusion (0..1): caps how dark a surface can get so tight gaps don't slam to black. live - no re-bake" );
@@ -120,6 +122,7 @@ void R_InitAO( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_silhouette );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_soft );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_height );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_ground_dot );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_debug );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_world );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_max );
@@ -148,6 +151,65 @@ qboolean R_AODebugActive( void )
 qboolean R_AOSilhouette( void )
 {
 	return r_ao_silhouette.value != 0.0f;
+}
+
+/*
+=================
+R_AOGroundTrace
+
+xash3d-streaming: find a CONFIDENT ground spot under one entity for contact AO,
+and report whether one was found. `contact` is a point under the model's actual
+resting mass - a low-biased centroid of the posed geometry, NOT the entity origin
+(which can sit far from where the body really is, e.g. a scientist whose origin is
+out over a desk). The caller computes it from the posed verts.
+
+This is deliberately separate from the lighting lightspot (g_studio.lightspot),
+which traces the WORLD ONLY for shading: here we trace down through brush ENTITIES
+too (PM_STUDIO_IGNORE keeps func_door/plat/train/breakable while skipping studio
+models), so a body resting on the anomalous-materials airlock door - or a chair
+seat - grounds on THAT surface, not the world floor metres below, and never
+self-collides.
+
+Returns false (caller skips AO entirely) unless the hit is a real floor close
+under the contact point: a roughly-horizontal surface (normal up >=
+r_ao_ground_dot), not inside solid, within a sane vertical gap. Skipping beats
+drawing a blob at a wrong spot - a floating shadow.
+=================
+*/
+qboolean R_AOGroundTrace( const vec3_t contact, vec3_t out_floor )
+{
+	vec3_t src, end;
+	pmtrace_t tr;
+	float gap, maxgap;
+
+	if( !R_AODebugActive() && !R_AOContactActive( ))
+		return false;
+
+	// start just above the contact (the body's lowest point) so we never hit a
+	// surface ABOVE it - e.g. a desk the model leans under - then trace straight
+	// down well past any plausible drop
+	VectorCopy( contact, src );
+	src[2] += 8.0f;
+	VectorCopy( contact, end );
+	end[2] -= 2048.0f;
+
+	tr = gEngfuncs.CL_TraceLine( src, end, PM_STUDIO_IGNORE );
+	gap = contact[2] - tr.endpos[2];
+
+	if( tr.startsolid || tr.allsolid || tr.fraction >= 1.0f )
+		return false;	// started in solid, or nothing below -> no confident floor
+
+	if( tr.plane.normal[2] < bound( 0.0f, r_ao_ground_dot.value, 1.0f ))
+		return false;	// wall / steep slope -> not a floor we trust under the model
+
+	// the floor must sit close under the contact point; a far hit (ledge edge,
+	// airborne, over a pit) is not "the ground under this entity"
+	maxgap = Q_max( 16.0f, r_ao_fade.value );
+	if( gap < -16.0f || gap > maxgap )
+		return false;
+
+	VectorCopy( tr.endpos, out_floor );
+	return true;
 }
 
 /*
