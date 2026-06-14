@@ -188,6 +188,14 @@ static void SDLash_SetActiveGameController( SDL_JoystickID id )
 			char type[8];
 			Q_snprintf( type, sizeof( type ), "%d", (int)SDL_GameControllerGetType( g_current_gamepad ));
 			Cvar_FullSet( "joy_controller_type", type, FCVAR_READ_ONLY );
+
+			// the built-in Steam Deck pad (Valve VID 0x28DE / PID 0x1205) has no
+			// SDL controller type, so flag it for the menu's glyph picker. Under
+			// Steam Input the pad is a virtual Xbox instead -- there the
+			// SteamDeck=1 environment variable handles detection at init.
+			if( SDL_GameControllerGetVendor( g_current_gamepad ) == 0x28DE
+				&& SDL_GameControllerGetProduct( g_current_gamepad ) == 0x1205 )
+				Cvar_FullSet( "sys_steamdeck", "1", FCVAR_READ_ONLY );
 		}
 #endif // SDL_VERSION_ATLEAST( 2, 0, 12 )
 

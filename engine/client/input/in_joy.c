@@ -615,6 +615,18 @@ void Joy_Init( void )
 	// raw SDL_GameControllerType of the active pad, updated by the platform
 	// layer; the menu uses it to choose matching button glyphs
 	Cvar_Get( "joy_controller_type", "0", FCVAR_READ_ONLY, "type of the active game controller (0 = none/unknown)" );
+
+	// Steam Deck hardware advertises itself via SteamDeck=1 in the environment
+	// (set by Steam/gamescope, and present even when Steam Input hides the
+	// built-in controls behind a virtual Xbox pad). SDL has no Deck controller
+	// type, so the menu reads this to pick the Deck's own button glyphs. The
+	// SDL2 platform layer also raises it when it sees the raw Deck VID/PID.
+	{
+		const char *deck = getenv( "SteamDeck" );
+		Cvar_Get( "sys_steamdeck", ( deck && deck[0] == '1' ) ? "1" : "0",
+			FCVAR_READ_ONLY, "running on Steam Deck hardware (1 = yes)" );
+	}
+
 	Cvar_RegisterVariable( &joy_gyro_enable );
 
 	Cvar_RegisterVariable( &joy_gyro_pitch );
