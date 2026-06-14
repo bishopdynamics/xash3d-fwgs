@@ -1811,6 +1811,113 @@ static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel, vec3_t mi
 
 /*
 =================
+R_DrawBrushAOStamp
+
+xash3d-streaming: soft contact-AO footprint under an opaque brush entity (crate,
+breakable, door, func_wall...). Same CPU stamp as studio models: rasterize the
+model's faces - projected straight DOWN, height-weighted so parts near the floor
+contribute most - then blur + lay on the floor. The floor is found by tracing
+down (R_LightVec), and the height falloff self-limits it: anything not resting on
+a floor (door mid-wall, raised platform) traces to a distant floor and fades to
+nothing. Faces are model-local, so they're CPU-transformed to world here.
+=================
+*/
+static void R_DrawBrushAOStamp( cl_entity_t *e )
+{
+	model_t *m = e->model;
+	matrix4x4 obj;
+	vec3_t wmins, wmaxs, center, top, bot, lspot;
+	float floorz, invh, minx, miny, maxx, maxy, margin, sx, sy, alpha;
+	int size, blur, i;
+
+	if( !( R_AOContactActive() || R_AODebugActive() ))
+		return;
+	if( !m || m->type != mod_brush )
+		return;
+	if( !R_ModelOpaque( e->curstate.rendermode ))
+		return;
+
+	// world-space bbox (rotated entities use the radius box, like R_DrawBrushModel)
+	if( !VectorIsNull( e->angles ))
+	{
+		for( i = 0; i < 3; i++ )
+		{
+			wmins[i] = e->origin[i] - m->radius;
+			wmaxs[i] = e->origin[i] + m->radius;
+		}
+	}
+	else
+	{
+		VectorAdd( e->origin, m->mins, wmins );
+		VectorAdd( e->origin, m->maxs, wmaxs );
+	}
+
+	// trace down through the entity to the floor under it
+	VectorAverage( wmins, wmaxs, center );
+	VectorSet( top, center[0], center[1], wmaxs[2] + 8.0f );
+	VectorSet( bot, center[0], center[1], wmins[2] - 4096.0f );
+	R_LightVec( top, bot, lspot, NULL );
+	floorz = lspot[2];
+
+	// peak darkness: strength faded by how far the bottom sits above the floor
+	alpha = R_AOContactAlpha( lspot, wmins, vec3_origin );
+
+	margin = R_AOSoftRadius() + 4.0f;
+	minx = wmins[0] - margin; miny = wmins[1] - margin;
+	maxx = wmaxs[0] + margin; maxy = wmaxs[1] + margin;
+	if( maxx - minx < 1.0f || maxy - miny < 1.0f )
+		return;
+
+	R_AOStampBegin( &size );
+	sx = ( size - 1 ) / ( maxx - minx );
+	sy = ( size - 1 ) / ( maxy - miny );
+	invh = 1.0f / R_AOContactHeight();
+
+	Matrix4x4_CreateFromEntity( obj, e->angles, e->origin, 1.0f );
+
+	for( i = 0; i < m->nummodelsurfaces; i++ )
+	{
+		msurface_t *surf = &m->surfaces[m->firstmodelsurface + i];
+		glpoly2_t *p = surf->polys;
+
+		if( FBitSet( surf->flags, SURF_DRAWSKY | SURF_DRAWTURB | SURF_DRAWTURB_QUADS ))
+			continue;
+
+		for( ; p; p = p->next )
+		{
+			float *vert = p->verts[0];
+			float first[2] = { 0, 0 }, prev[2] = { 0, 0 }, cur[2], firstw = 0, prevw = 0, curw;
+			int v;
+
+			for( v = 0; v < p->numverts; v++, vert += VERTEXSIZE )
+			{
+				vec3_t world;
+
+				Matrix4x4_VectorTransform( obj, vert, world );
+				cur[0] = ( world[0] - minx ) * sx;
+				cur[1] = ( world[1] - miny ) * sy;
+				curw = 1.0f - ( world[2] - floorz ) * invh;
+				if( curw < 0.0f ) curw = 0.0f;
+				if( curw > 1.0f ) curw = 1.0f;
+
+				if( v == 0 ) { first[0] = cur[0]; first[1] = cur[1]; firstw = curw; }
+				else if( v >= 2 )
+					R_AOStampTri( first, prev, cur, firstw, prevw, curw );	// fan
+
+				prev[0] = cur[0]; prev[1] = cur[1]; prevw = curw;
+			}
+		}
+	}
+
+	blur = (int)( R_AOSoftRadius() * sx + 0.5f );
+	if( blur < 1 ) blur = 1;
+	if( blur > size / 3 ) blur = size / 3;
+
+	R_AOStampProject( minx, miny, maxx, maxy, floorz, alpha, blur );
+}
+
+/*
+=================
 R_DrawBrushModel
 =================
 */
@@ -1936,6 +2043,8 @@ void R_DrawBrushModel( cl_entity_t *e )
 	}
 
 	R_LoadIdentity();	// restore worldmatrix
+
+	R_DrawBrushAOStamp( e );	// soft contact-AO footprint (world-space; needs identity matrix)
 }
 
 
