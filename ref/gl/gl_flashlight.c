@@ -751,7 +751,12 @@ void R_FlashlightShadowPass( void )
 
 	pglEnable( GL_SCISSOR_TEST );
 	pglScissor( 0, 0, S, S );
+#if !XASH_GLES
+	// glClearDepth is the desktop-GL spelling (GLES has only glClearDepthf). The
+	// shadow map is a desktop-GL-only feature, so skip it on the GLES renderers;
+	// 1.0 is the default clear-depth anyway, so the following pglClear is fine.
 	pglClearDepth( 1.0 );
+#endif
 	pglClear( GL_DEPTH_BUFFER_BIT );
 
 	pglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
@@ -841,9 +846,12 @@ void R_FlashlightShadowPass( void )
 
 	GL_PopPolygonOffset();
 
-	// copy depth into the shadow texture
+	// copy depth into the shadow texture (desktop-GL-only path; the GLES
+	// renderers don't build the shadow map, see the pglClearDepth note above)
 	GL_Bind( 0, fl_depth );
+#if !XASH_GLES
 	pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 0, 0, S, S );
+#endif
 
 	// restore
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
