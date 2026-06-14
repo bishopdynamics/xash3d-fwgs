@@ -2608,6 +2608,13 @@ static void CL_UpdateFlashlight( cl_entity_t *ent )
 	cl_entity_t	*hit;
 	dlight_t		*dl;
 
+	// xash3d-streaming: the improved projected flashlight (r_flashlight_projected,
+	// rendered in ref_gl) replaces this stock point-dlight. Suppress the dlight when
+	// it is active so the two don't double-light the world. EF_DIMLIGHT stays set, so
+	// the renderer still knows the flashlight is on and draws the projected cone.
+	if( Cvar_VariableInteger( "r_flashlight_projected" ))
+		return;
+
 	if( ent->index == ( cl.playernum + 1 ))
 	{
 		// local player case

@@ -2107,6 +2107,190 @@ static void R_StudioDrawPoints( void )
 		r_stats.c_studio_polys += pmesh->numtris;
 		tr.blend = oldblend;
 	}
+
+	// xash3d-streaming: light this submodel with the projected flashlight cookie
+	// (monsters/props otherwise stay dark - the cookie lights world surfaces only,
+	// and the stock dlight is suppressed under projected mode). Opaque models only;
+	// the viewmodel is skipped (it sits right at the lens).
+	int flmode = 0;
+	if( R_ModelOpaque( RI.currententity->curstate.rendermode )
+		&& RI.currententity != tr.viewent
+		&& ( flmode = R_FlashlightStudioSetup( )) != 0 )
+	{
+		qboolean fl_albedo = ( flmode == 2 ) ? true : false;
+		mstudiotexture_t *fl_ptex = (mstudiotexture_t *)((byte *)m_pStudioHeader + m_pStudioHeader->textureindex);
+
+		for( int j = 0; j < m_pSubModel->nummesh; j++ )
+		{
+			mstudiomesh_t *fl_mesh = g_studio.meshes[j].mesh;
+			short *ptricmds = (short *)((byte *)m_pStudioHeader + fl_mesh->triindex);
+			qboolean fl_chrome = FBitSet( g_studio.meshes[j].flags, STUDIO_NF_CHROME ) ? true : false;
+			qboolean fl_uv = FBitSet( g_studio.meshes[j].flags, STUDIO_NF_UV_COORDS ) ? true : false;
+			float fs = 1.0f, ft = 1.0f;
+			int i;
+
+			if( fl_albedo )
+			{
+				if( fl_chrome )
+					GL_Bind( 0, tr.whiteTexture );	// chrome is env-mapped; keep it a flat cookie add
+				else
+				{
+					int fl_skin = pskinref[fl_mesh->skinref];
+					GL_Bind( 0, fl_ptex[fl_skin].index );
+					fs = 1.0f / (float)fl_ptex[fl_skin].width;
+					ft = 1.0f / (float)fl_ptex[fl_skin].height;
+				}
+			}
+
+			while(( i = *( ptricmds++ )))
+			{
+				if( i < 0 ) { pglBegin( GL_TRIANGLE_FAN ); i = -i; }
+				else pglBegin( GL_TRIANGLE_STRIP );
+
+				for( ; i > 0; i--, ptricmds += 4 )
+				{
+					if( fl_albedo && !fl_chrome )
+					{
+						if( fl_uv )
+							GL_MultiTexCoord2f( 0, HalfToFloat( ptricmds[2] ), HalfToFloat( ptricmds[3] ));
+						else
+							GL_MultiTexCoord2f( 0, ptricmds[2] * fs, ptricmds[3] * ft );
+					}
+					pglVertex3fv( g_studio.verts[ptricmds[0]] );
+				}
+
+				pglEnd();
+			}
+		}
+		R_FlashlightStudioDone();
+	}
+}
+
+static void R_StudioSetHeader( studiohdr_t *pheader );	// defined below; needed by the shadow-caster path
+
+/*
+===============
+R_StudioDrawPointsDepth
+
+Depth-only submit of the current submodel (m_pSubModel) for the flashlight shadow
+map: bone-transform the verts into g_studio.verts and emit every mesh's triangles
+as positions only - no skin, no lighting, no texcoords, no color. The light view/
+projection and the depth-only render state (color mask off, cull off, polygon
+offset, depth write) are configured by the caller (R_FlashlightShadowPass).
+===============
+*/
+static void R_StudioDrawPointsDepth( void )
+{
+	byte		*pvertbone;
+	vec3_t		*pstudioverts;
+	mstudiomesh_t	*pmesh;
+	int		i, j;
+
+	if( !m_pStudioHeader || !m_pSubModel )
+		return;
+
+	pvertbone = ((byte *)m_pStudioHeader + m_pSubModel->vertinfoindex);
+	pstudioverts = (vec3_t *)((byte *)m_pStudioHeader + m_pSubModel->vertindex);
+
+	// bone-transform the verts into world space (same as R_StudioDrawPoints, sans lighting)
+	if( FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) && m_pSubModel->blendvertinfoindex != 0 )
+	{
+		mstudioboneweight_t	*pvertweight = (mstudioboneweight_t *)((byte *)m_pStudioHeader + m_pSubModel->blendvertinfoindex);
+		matrix3x4		skinMat;
+
+		for( i = 0; i < m_pSubModel->numverts; i++ )
+		{
+			R_StudioComputeSkinMatrix( &pvertweight[i], skinMat );
+			Matrix3x4_VectorTransform( skinMat, pstudioverts[i], g_studio.verts[i] );
+		}
+	}
+	else
+	{
+		for( i = 0; i < m_pSubModel->numverts; i++ )
+			Matrix3x4_VectorTransform( g_studio.bonestransform[pvertbone[i]], pstudioverts[i], g_studio.verts[i] );
+	}
+
+	pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex);
+	for( j = 0; j < m_pSubModel->nummesh; j++ )
+	{
+		short	*ptricmds = (short *)((byte *)m_pStudioHeader + pmesh[j].triindex);
+		int	n;
+
+		while(( n = *( ptricmds++ )))
+		{
+			if( n < 0 ) { pglBegin( GL_TRIANGLE_FAN ); n = -n; }
+			else pglBegin( GL_TRIANGLE_STRIP );
+
+			for( ; n > 0; n--, ptricmds += 4 )
+				pglVertex3fv( g_studio.verts[ptricmds[0]] );
+
+			pglEnd();
+		}
+	}
+}
+
+/*
+===============
+R_StudioDrawShadowCasters
+
+xash3d-streaming: render the depth of every visible studio model (monsters/props)
+from the flashlight's POV, so they cast into the shadow map. Called by
+R_FlashlightShadowPass after the world depth and before the depth copy, while the
+light view/projection and depth-only render state are active. Bones are set up
+here exactly as for the normal draw (which, later in the frame, sets them up
+again - g_studio.verts is transient and gets rebuilt per model). View-frustum
+culled via R_StudioCheckBBox: the beam points roughly where the player looks, so
+on-screen casters are the ones whose shadows land on visible surfaces.
+===============
+*/
+void R_StudioDrawShadowCasters( void )
+{
+	cl_entity_t	*save_ent = RI.currententity;
+	model_t		*save_mod = RI.currentmodel;
+	int		i, bp;
+
+	if( !tr.draw_list )
+		return;
+
+	R_StudioSetupTimings();
+
+	for( i = 0; i < tr.draw_list->num_solid_entities; i++ )
+	{
+		cl_entity_t *e = tr.draw_list->solid_entities[i];
+
+		if( !e->model || e->model->type != mod_studio )
+			continue;
+		if( e == tr.viewent || e->player )
+			continue;	// viewmodel / players (gait path) are not cast here
+		if( e->curstate.movetype == MOVETYPE_FOLLOW )
+			continue;	// attached models (e.g. weapons) ride their parent
+		if( !R_ModelOpaque( e->curstate.rendermode ))
+			continue;	// translucent models don't cast a solid shadow
+
+		RI.currententity = e;
+		RI.currentmodel = e->model;
+
+		R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model ));
+		if( !m_pStudioHeader )
+			continue;
+
+		R_StudioSetUpTransform( e );
+		if( !R_StudioCheckBBox( ))
+			continue;
+		if( m_pStudioHeader->numbodyparts == 0 )
+			continue;
+
+		R_StudioSetupBones( e );
+
+		for( bp = 0; bp < m_pStudioHeader->numbodyparts; bp++ )
+		{
+			R_StudioSetupModel( bp, (void**)&m_pBodyPart, (void**)&m_pSubModel );
+			R_StudioDrawPointsDepth();
+		}
+	}
+
+	RI.currententity = save_ent;
+	RI.currentmodel = save_mod;
 }
 
 /*

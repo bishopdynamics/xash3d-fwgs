@@ -372,6 +372,11 @@ void R_MarkLeaves( void );
 void R_DrawWorld( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
+void R_InitFlashlight( void );
+void R_DrawFlashlight( void );
+void R_FlashlightShadowPass( void );
+int R_FlashlightStudioSetup( void );
+void R_FlashlightStudioDone( void );
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
 void GL_SetupFogColorForSurfaces( void );
 void R_DrawAlphaTextureChains( void );
@@ -408,6 +413,7 @@ void R_StudioLerpMovement( cl_entity_t *e, double time, vec3_t origin, vec3_t an
 struct mstudiotex_s *R_StudioGetTexture( cl_entity_t *e );
 int R_GetEntityRenderMode( cl_entity_t *ent );
 void R_DrawStudioModel( cl_entity_t *e );
+void R_StudioDrawShadowCasters( void );	// flashlight shadow map: studio depth from the light's POV
 player_info_t *pfnPlayerInfo( int index );
 float R_StudioEstimateFrame( cl_entity_t *e, mstudioseqdesc_t *pseqdesc, double time );
 void R_StudioLerpMovement( cl_entity_t *e, double time, vec3_t origin, vec3_t angles );

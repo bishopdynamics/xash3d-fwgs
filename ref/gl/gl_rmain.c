@@ -959,6 +959,7 @@ void R_RenderScene( void )
 	R_SetupFrustum();
 	R_SetupFrame();
 	R_SetupGL( true );
+	R_FlashlightShadowPass();	// render the flashlight shadow map before the scene clear wipes the FB corner
 	R_Clear( ~0 );
 
 	R_MarkLeaves();
@@ -973,6 +974,8 @@ void R_RenderScene( void )
 	gEngfuncs.CL_ExtraUpdate ();	// don't let sound get messed up if going slow
 
 	R_DrawEntitiesOnList();
+
+	R_DrawFlashlight();
 
 	R_DrawWaterSurfaces();
 }
