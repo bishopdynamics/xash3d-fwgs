@@ -525,6 +525,34 @@ static void SV_Reload_f( void )
 
 /*
 ==================
+SV_ReapplyMounts_f
+
+Re-mount the filesystem (after an HD/addon content cvar change) and, if a
+single-player game is running, reload it so the new content swaps in live.
+Already-loaded models are reused until something frees them, so a rescan alone
+won't change them mid-game; we round-trip the current state through a temp
+save - the disconnect frees every loaded model and the reload re-reads them
+from the rescanned search path. Gated on a successful save so a failed save
+never strands the player at the menu (the change then applies on next map).
+==================
+*/
+static void SV_ReapplyMounts_f( void )
+{
+	FS_Rescan_f();
+
+	if( sv.state != ss_active || svs.maxclients != 1 )
+		return; // not a single-player game: applies on the next map load
+
+	if( !SV_SaveGame( "_remount" ))
+		return; // can't save right now; leave the running session untouched
+
+	// disconnect frees all loaded models; load re-precaches them from the
+	// rescanned paths; killsave removes the temp save (load already read it).
+	Cbuf_AddText( "disconnect; load _remount; killsave _remount\n" );
+}
+
+/*
+==================
 SV_ChangeLevel_f
 
 classic change level
@@ -1059,6 +1087,7 @@ void SV_InitOperatorCommands( void )
 		Cmd_AddCommand( "save", SV_Save_f, "save the game to a file" );
 		Cmd_AddCommand( "savequick", SV_QuickSave_f, "save the game to the quicksave" );
 		Cmd_AddCommand( "autosave", SV_AutoSave_f, "save the game to 'autosave' file" );
+		Cmd_AddCommand( "fs_reapply", SV_ReapplyMounts_f, "rescan content mounts and reload a running single-player game so new content applies live" );
 	}
 	else if( host.type == HOST_DEDICATED )
 	{
