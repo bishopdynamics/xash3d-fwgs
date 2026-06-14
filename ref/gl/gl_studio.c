@@ -1906,6 +1906,91 @@ static void R_StudioDrawArrays( uint startverts, uint startelems )
 
 /*
 ===============
+R_StudioStampAO
+
+xash3d-streaming: soft, shaped contact shadow. Rasterize the current submodel's
+triangles - projected straight DOWN (so the footprint follows the actual posed
+geometry, e.g. a toppled turret) - into a small coverage bitmap, then hand it to
+the AO module to box-blur and lay on the floor. Genuinely soft (texture-space
+blur). Uses bodypart 0 (the main body); called once per entity.
+===============
+*/
+static void R_StudioStampAO( float alpha )
+{
+	float floorz = g_studio.lightspot[2];
+	float invh = 1.0f / R_AOContactHeight();	// height falloff: 1 at floor -> 0 at the height
+	float minx = 1.0e9f, miny = 1.0e9f, maxx = -1.0e9f, maxy = -1.0e9f;
+	float margin, sx, sy;
+	mstudiomesh_t *pmesh;
+	int size, blur, i, k;
+
+	if( m_pSubModel->numverts < 3 )
+		return;
+
+	// world-space XY bounds of the projected submodel
+	for( i = 0; i < m_pSubModel->numverts; i++ )
+	{
+		float *v = g_studio.verts[i];
+		if( v[0] < minx ) minx = v[0];
+		if( v[0] > maxx ) maxx = v[0];
+		if( v[1] < miny ) miny = v[1];
+		if( v[1] > maxy ) maxy = v[1];
+	}
+	if( maxx - minx < 1.0f || maxy - miny < 1.0f )
+		return;
+
+	margin = R_AOSoftRadius() + 4.0f;	// room for the blurred edge to spread
+	minx -= margin; miny -= margin;
+	maxx += margin; maxy += margin;
+
+	R_AOStampBegin( &size );
+	sx = ( size - 1 ) / ( maxx - minx );
+	sy = ( size - 1 ) / ( maxy - miny );
+
+	pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex);
+	for( k = 0; k < m_pSubModel->nummesh; k++ )
+	{
+		short *ptricmds = (short *)((byte *)m_pStudioHeader + pmesh[k].triindex);
+		float first[2] = { 0, 0 }, p2[2] = { 0, 0 }, p1[2] = { 0, 0 }, cur[2];
+		float firstw = 0, p2w = 0, p1w = 0, curw;
+		int n, j;
+		qboolean fan;
+
+		while(( n = *( ptricmds++ )))
+		{
+			fan = ( n < 0 );
+			if( fan ) n = -n;
+
+			for( j = 0; j < n; j++, ptricmds += 4 )
+			{
+				float *av = g_studio.verts[ptricmds[0]];
+				cur[0] = ( av[0] - minx ) * sx;
+				cur[1] = ( av[1] - miny ) * sy;
+				curw = 1.0f - ( av[2] - floorz ) * invh;	// height weight (clamped below)
+				if( curw < 0.0f ) curw = 0.0f;
+				if( curw > 1.0f ) curw = 1.0f;
+
+				if( j == 0 ) { first[0] = cur[0]; first[1] = cur[1]; firstw = curw; }
+				else if( j >= 2 )
+				{
+					if( fan ) R_AOStampTri( first, p1, cur, firstw, p1w, curw );
+					else R_AOStampTri( p2, p1, cur, p2w, p1w, curw );
+				}
+				p2[0] = p1[0]; p2[1] = p1[1]; p2w = p1w;
+				p1[0] = cur[0]; p1[1] = cur[1]; p1w = curw;
+			}
+		}
+	}
+
+	blur = (int)( R_AOSoftRadius() * sx + 0.5f );	// world softness -> texels
+	if( blur < 1 ) blur = 1;
+	if( blur > size / 3 ) blur = size / 3;
+
+	R_AOStampProject( minx, miny, maxx, maxy, floorz, alpha, blur );
+}
+
+/*
+===============
 R_StudioDrawPoints
 
 ===============
@@ -2163,6 +2248,35 @@ static void R_StudioDrawPoints( void )
 			}
 		}
 		R_FlashlightStudioDone();
+	}
+
+	// xash3d-streaming: soft contact-AO footprint under the model. Hooked HERE rather
+	// than in R_StudioRenderFinal because the HL client DLL's studio renderer calls the
+	// engine's StudioDrawPoints but bypasses the engine R_StudioRenderFinal. This runs
+	// once per BODYPART, so a per-entity/per-frame guard keeps it to a single splat
+	// (overlapping draws would multiply the darkness). Same skips as the stock shadow.
+	// one contact footprint per entity per frame (this runs per-bodypart, and the
+	// silhouette stamp uses bodypart 0's posed verts, available on the first call).
+	if(( R_AOContactActive() || R_AODebugActive() )
+		&& RI.currententity != tr.viewent
+		&& g_studio.rendermode != kRenderTransAdd
+		&& !FBitSet( RI.currententity->curstate.effects, EF_NOSHADOW )
+		&& !FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
+	{
+		static cl_entity_t *ao_last_ent = NULL;
+		static int ao_last_frame = -1;
+
+		if( RI.currententity != ao_last_ent || tr.framecount != ao_last_frame )
+		{
+			ao_last_ent = RI.currententity;
+			ao_last_frame = tr.framecount;
+
+			if( R_AOSilhouette( ))
+				R_StudioStampAO( R_AOContactAlpha( g_studio.lightspot, RI.currententity->origin, RI.currentmodel->mins ));
+			else
+				R_AOEntityContact( g_studio.lightspot, RI.currententity->origin,
+					RI.currententity->angles, RI.currentmodel->mins, RI.currentmodel->maxs );
+		}
 	}
 }
 

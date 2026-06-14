@@ -1247,6 +1247,7 @@ qboolean R_Init( void )
 
 	GL_InitCommands();
 	R_InitFlashlight();
+	R_InitAO();
 	GL_InitRandomTable();
 
 	GL_SetDefaultState();

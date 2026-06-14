@@ -377,6 +377,19 @@ void R_DrawFlashlight( void );
 void R_FlashlightShadowPass( void );
 int R_FlashlightStudioSetup( void );
 void R_FlashlightStudioDone( void );
+
+// gl_ao.c - ambient occlusion (phase 1: entity->floor contact)
+void R_InitAO( void );
+qboolean R_AOContactActive( void );
+qboolean R_AODebugActive( void );
+qboolean R_AOSilhouette( void );
+float R_AOSoftRadius( void );
+float R_AOContactHeight( void );
+float R_AOContactAlpha( const vec3_t floor, const vec3_t origin, const vec3_t mins );
+void R_AOEntityContact( const vec3_t floor, const vec3_t origin, const vec3_t angles, const vec3_t mins, const vec3_t maxs );
+void R_AOStampBegin( int *size );
+void R_AOStampTri( const float a[2], const float b[2], const float c[2], float wa, float wb, float wc );
+void R_AOStampProject( float minx, float miny, float maxx, float maxy, float floorz, float alpha, int blur );
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
 void GL_SetupFogColorForSurfaces( void );
 void R_DrawAlphaTextureChains( void );
