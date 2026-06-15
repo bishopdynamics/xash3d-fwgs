@@ -40,7 +40,7 @@ built phase by phase:
 #include "pm_defs.h"	// PM_STUDIO_IGNORE etc. for the contact-AO ground trace
 #include "ao_cache.h"	// baked world-AO cache format (written by host_aobake.c)
 
-CVAR_DEFINE_AUTO( r_ao, "1", FCVAR_ARCHIVE, "ambient occlusion: 0 off, 1 world-space (\"real\")" );
+CVAR_DEFINE_AUTO( r_ao, "1", FCVAR_ARCHIVE, "entity contact AO: soft contact shadow under monsters/props (0/1)" );
 CVAR_DEFINE_AUTO( r_ao_strength, "0.5", FCVAR_ARCHIVE, "contact-AO darkness under entities (0..1)" );
 CVAR_DEFINE_AUTO( r_ao_size, "1.1", FCVAR_ARCHIVE, "contact-AO footprint scale vs the model bbox" );
 CVAR_DEFINE_AUTO( r_ao_fade, "72", FCVAR_ARCHIVE, "height (units) over the floor at which the contact AO fully fades out" );
@@ -48,9 +48,11 @@ CVAR_DEFINE_AUTO( r_ao_silhouette, "1", FCVAR_ARCHIVE, "contact AO shape: 1 = pr
 CVAR_DEFINE_AUTO( r_ao_soft, "2", FCVAR_ARCHIVE, "silhouette penumbra width in units (edge softness); 0 = hard edge" );
 CVAR_DEFINE_AUTO( r_ao_height, "16", FCVAR_ARCHIVE, "contact height falloff: model parts at the floor cast fully, fading to nothing this many units up (feet > legs > arms)" );
 CVAR_DEFINE_AUTO( r_ao_ground_dot, "0.7", FCVAR_ARCHIVE, "contact-AO ground confidence: minimum upward floor-normal (0..1); a steeper hit is treated as not-a-floor and AO is skipped rather than floated" );
-CVAR_DEFINE_AUTO( r_ao_debug, "0", 0, "debug: draw contact-AO footprints as solid magenta (no depth/blend), bypassing the normal gates" );
-CVAR_DEFINE_AUTO( r_ao_world, "0.8", FCVAR_ARCHIVE, "baked world AO strength (0 = off .. 1)" );
+CVAR_DEFINE_AUTO( r_ao_debug, "0", 0, "debug: draw entity contact-AO footprints as solid PURPLE (no depth/blend), bypassing the normal gates" );
+CVAR_DEFINE_AUTO( r_ao_world, "1", FCVAR_ARCHIVE, "baked world AO: corner/recess shading on the world (0/1)" );
+CVAR_DEFINE_AUTO( r_ao_world_strength, "0.8", FCVAR_ARCHIVE, "baked world AO darkness (0 = off .. 1)" );
 CVAR_DEFINE_AUTO( r_ao_world_max, "0.6", FCVAR_ARCHIVE, "world-AO max occlusion (0..1): caps how dark a surface can get so tight gaps don't slam to black. live - no re-bake" );
+CVAR_DEFINE_AUTO( r_ao_world_debug, "0", 0, "debug: show baked world AO as HOT PINK in the lightmap (live, no re-bake)" );
 
 // r_ao_world_dist (bake quality) lives engine-side in host_aobake.c now: the
 // renderer no longer raycasts, it loads the cache the engine baked.
@@ -125,7 +127,9 @@ void R_InitAO( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_ground_dot );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_debug );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_world );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_strength );
 	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_max );
+	gEngfuncs.Cvar_RegisterVariable( &r_ao_world_debug );
 }
 
 float R_AOSoftRadius( void )
@@ -272,12 +276,12 @@ static void R_DrawContactSplat( const vec3_t floor, const vec3_t right, const ve
 
 	if( R_AODebugActive( ))
 	{
-		// DEBUG: solid magenta, no texture/blend/depth - just prove the quad exists
+		// DEBUG: solid purple, no texture/blend/depth - just prove the quad exists
 		pglDisable( GL_TEXTURE_2D );
 		pglDisable( GL_BLEND );
 		pglDisable( GL_DEPTH_TEST );
 		GL_Cull( GL_NONE );
-		pglColor4f( 1.0f, 0.0f, 1.0f, 1.0f );
+		pglColor4f( 0.6f, 0.1f, 0.9f, 1.0f );	// entity contact debug = purple
 		pglBegin( GL_TRIANGLE_FAN );
 		pglVertex3fv( c[0] ); pglVertex3fv( c[1] ); pglVertex3fv( c[2] ); pglVertex3fv( c[3] );
 		pglEnd();
@@ -522,7 +526,7 @@ void R_AOStampProject( float minx, float miny, float maxx, float maxy, float flo
 	pglDepthMask( GL_FALSE );
 	GL_Cull( GL_NONE );
 	GL_PushPolygonOffset( -1.0f, -2.0f );
-	if( dbg ) pglColor4f( 1.0f, 0.0f, 1.0f, 1.0f );
+	if( dbg ) pglColor4f( 0.6f, 0.1f, 0.9f, 1.0f );	// entity contact debug = purple
 	else pglColor4f( 0.0f, 0.0f, 0.0f, alpha );
 
 	pglBegin( GL_TRIANGLE_FAN );
@@ -566,14 +570,19 @@ static model_t	*ao_baked_model = NULL;
 
 float R_AOWorldStrength( void )
 {
-	if( r_ao.value < 1.0f )
-		return 0.0f;	// master "Ambient Occlusion" toggle gates world AO too
-	return r_ao_world.value;
+	if( !r_ao_world.value )
+		return 0.0f;	// world AO toggle (independent of the entity-contact toggle r_ao)
+	return r_ao_world_strength.value;
 }
 
 float R_AOWorldMax( void )
 {
 	return bound( 0.0f, r_ao_world_max.value, 1.0f );
+}
+
+qboolean R_AOWorldDebugActive( void )
+{
+	return r_ao_world_debug.value != 0.0f;
 }
 
 // occlusion bytes for a surface, or NULL if not baked (or baked for another map)
@@ -704,19 +713,19 @@ void R_AOWorldFrame( void )
 {
 	static float l_ao = -1.0f, l_world = -1.0f, l_max = -1.0f, l_dbg = -1.0f;
 
-	// Re-apply the baked layer live when an apply-time knob changes - the master
-	// toggle, world strength, the clamp, or debug. No re-bake needed for these, so
-	// turning AO on/off from the menu (or sliding strength) is instant.
-	if( r_ao.value != l_ao || r_ao_world.value != l_world || r_ao_world_max.value != l_max || r_ao_debug.value != l_dbg )
+	// Re-apply the baked layer live when an apply-time world knob changes - the world
+	// toggle, world strength, the clamp, or world debug. No re-bake needed for these, so
+	// turning world AO on/off from the menu (or sliding strength) is instant.
+	if( r_ao_world.value != l_ao || r_ao_world_strength.value != l_world || r_ao_world_max.value != l_max || r_ao_world_debug.value != l_dbg )
 	{
-		l_ao = r_ao.value; l_world = r_ao_world.value;
-		l_max = r_ao_world_max.value; l_dbg = r_ao_debug.value;
+		l_ao = r_ao_world.value; l_world = r_ao_world_strength.value;
+		l_max = r_ao_world_max.value; l_dbg = r_ao_world_debug.value;
 		if( ao_baked_model == WORLDMODEL )
 			GL_RebuildLightmaps();
 	}
 
-	// load the cache once when the master AO toggle and world AO are both on
-	if( r_ao.value < 1.0f || r_ao_world.value <= 0.0f || !WORLDMODEL )
+	// load the cache once when world AO (or its debug view) is on
+	if(( !r_ao_world.value && !r_ao_world_debug.value ) || !WORLDMODEL )
 		return;
 	if( WORLDMODEL == ao_baked_model )
 		return;	// already loaded this map

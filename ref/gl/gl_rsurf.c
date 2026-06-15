@@ -759,12 +759,12 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 		R_AddDynamicLights( surf );
 
 	// xash3d-streaming: baked world AO. A per-surface occlusion layer (R_AOWorldMap)
-	// multiplies into each lit texel - or, with r_ao_debug, replaces it with magenta
-	// so the bake can be verified. Kept off the BSP data, so strength is a live tweak.
+	// multiplies into each lit texel - or, with r_ao_world_debug, replaces it with hot
+	// pink so the bake can be verified. Kept off the BSP data, so strength is a live tweak.
 	const byte *aomap = R_AOWorldMap( surf );
 	const float ao_str = R_AOWorldStrength();
 	const float ao_max = R_AOWorldMax();
-	const qboolean ao_dbg = R_AODebugActive();
+	const qboolean ao_dbg = R_AOWorldDebugActive();
 	const qboolean ao_on = ( aomap && ( ao_str > 0.0f || ao_dbg ));
 
 	for( int t = 0; t < tmax; t++ )
@@ -781,8 +781,8 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 
 				if( ao_dbg )
 				{
-					byte mv = (byte)( occ * 255.0f );	// magenta = raw occlusion (un-clamped)
-					dst[0] = mv; dst[1] = 0; dst[2] = mv; dst[3] = 255;
+					byte mv = (byte)( occ * 255.0f );	// hot pink = raw occlusion (un-clamped)
+					dst[0] = mv; dst[1] = (byte)( mv * 0.08f ); dst[2] = (byte)( mv * 0.58f ); dst[3] = 255;
 					continue;
 				}
 				if( occ > ao_max ) occ = ao_max;	// clamp so tight gaps don't go black

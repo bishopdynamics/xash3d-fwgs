@@ -400,6 +400,7 @@ void R_AOStampProject( float minx, float miny, float maxx, float maxy, float flo
 byte *R_AOWorldMap( const msurface_t *surf );	// baked per-surface occlusion (NULL if none)
 float R_AOWorldStrength( void );
 float R_AOWorldMax( void );	// occlusion clamp (tight gaps can't slam to black)
+qboolean R_AOWorldDebugActive( void );	// world AO debug view (hot pink), separate from entity-contact debug
 void R_AOWorldInvalidate( void );	// drop the baked layer on map (re)build
 void R_AOWorldFrame( void );		// per-frame: load the current map's baked AO cache when world AO is on
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
