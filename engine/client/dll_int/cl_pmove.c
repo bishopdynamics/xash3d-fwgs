@@ -208,13 +208,25 @@ void CL_CheckPredictionError( void )
 	dist = VectorLength( delta );
 
 	// save the prediction error for interpolation
-	if( dist > MAX_PREDICTION_ERROR )
+	//
+	// xash3d-streaming: on the first frame of a new level the predicted-origin
+	// history still holds the previous map's (or a zeroed) position, so this
+	// "error" is meaningless. In demo playback (no local server, SV_Active()
+	// false) a moderate error would arm cl_smoothtime correction smoothing and
+	// ease the view in from that stale origin over ~0.1s — an off-map camera
+	// that slides to the player, visible only in recordings (a listen server
+	// has SV_Active() true and skips the smoothing). Treat a changelevel as a
+	// teleport: snap, and cancel any correction smoothing already pending.
+	if( dist > MAX_PREDICTION_ERROR || cl.first_frame )
 	{
 		if( cl_showerror.value && host_developer.value )
 			Con_NPrintf( 10 + ( ++pos & 3 ), "^3player teleported:^7 %.3f units\n", dist );
 
 		// a teleport or something or gamepaused
 		VectorClear( cl.local.prediction_error );
+
+		if( cl.first_frame )
+			cls.correction_time = 0;
 	}
 	else
 	{
