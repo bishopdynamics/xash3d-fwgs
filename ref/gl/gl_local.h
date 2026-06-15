@@ -377,6 +377,11 @@ void R_DrawFlashlight( void );
 void R_FlashlightShadowPass( void );
 int R_FlashlightStudioSetup( void );
 void R_FlashlightStudioDone( void );
+qboolean R_FlashlightSuppressUnit( int tmu );	// bind inverted cookie on tmu (MODULATE) so callers fade in the beam
+
+// gl_entshadow.c - dynamic entity shadows (improved map lighting, stage 1)
+void R_InitEntityShadows( void );
+void R_DrawEntityShadows( void );	// soft coverage build + darkening receiver pass, end of frame
 
 // gl_ao.c - ambient occlusion (phase 1: entity->floor contact)
 void R_InitAO( void );
@@ -434,6 +439,9 @@ struct mstudiotex_s *R_StudioGetTexture( cl_entity_t *e );
 int R_GetEntityRenderMode( cl_entity_t *ent );
 void R_DrawStudioModel( cl_entity_t *e );
 void R_StudioDrawShadowCasters( void );	// flashlight shadow map: studio depth from the light's POV
+void R_StudioRenderDepthForEntity( cl_entity_t *e );	// pose + depth submit for one studio entity
+qboolean R_StudioShadowBounds( cl_entity_t *e, const float *view, float outmin[2], float outmax[2] );	// pose + measure silhouette extent in light view space
+qboolean R_StudioStampShadow( cl_entity_t *e, const float *texmat, byte *cov, int size );	// pose + rasterize silhouette for the soft entity shadow
 player_info_t *pfnPlayerInfo( int index );
 float R_StudioEstimateFrame( cl_entity_t *e, mstudioseqdesc_t *pseqdesc, double time );
 void R_StudioLerpMovement( cl_entity_t *e, double time, vec3_t origin, vec3_t angles );

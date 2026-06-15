@@ -59,6 +59,7 @@ CVAR_DEFINE_AUTO( r_flashlight_debug, "0", 0, "debug: draw the raw projected coo
 static const float fl_color[3] = { 1.0f, 0.96f, 0.88f };
 
 static int fl_cookie = 0;	// procedural cookie texture (cone cross-section)
+static int fl_cookie_inv = 0;	// 1 - cookie, for entity-shadow suppression in the beam
 static int fl_atten = 0;	// distance-falloff ramp along the beam
 static int fl_depth = 0;	// shadow-map depth texture
 static int fl_depth_size = 0;	// current side length of fl_depth (tracks r_flashlight_shadow_size)
@@ -153,7 +154,7 @@ static void R_FlashlightUpdateCookie( void )
 	float spillv = bound( 0.0f, r_flashlight_spill_intensity.value, 1.0f );
 	const float half = ( FL_COOKIE_SIZE - 1 ) * 0.5f;
 	byte *data;
-	int x, y;
+	int x, y, i;
 
 	if( fl_cookie && beam_r == fl_cookie_beam && spillv == fl_cookie_spillv )
 		return;	// unchanged
@@ -199,6 +200,16 @@ static void R_FlashlightUpdateCookie( void )
 
 	fl_cookie = GL_CreateTexture( "*flashlight_cookie", FL_COOKIE_SIZE, FL_COOKIE_SIZE, data,
 		TF_NOMIPMAP | TF_BORDER | TF_HAS_ALPHA | ( fl_cookie ? TF_UPDATE : 0 ));
+
+	// inverted cookie (1 - cookie) for entity-shadow suppression: where the beam is
+	// bright the entity shadow's darkening is multiplied toward 0. The cookie fades to 0
+	// by its edge, so the inverse is ~1 (white) there - TF_CLAMP then reads "no
+	// suppression" outside the cone (shadows away from the beam are untouched).
+	for( i = 0; i < FL_COOKIE_SIZE * FL_COOKIE_SIZE * 4; i++ )
+		data[i] = 255 - data[i];
+	fl_cookie_inv = GL_CreateTexture( "*flashlight_cookie_inv", FL_COOKIE_SIZE, FL_COOKIE_SIZE, data,
+		TF_NOMIPMAP | TF_CLAMP | TF_HAS_ALPHA | ( fl_cookie_inv ? TF_UPDATE : 0 ));
+
 	fl_cookie_beam = beam_r;
 	fl_cookie_spillv = spillv;
 
@@ -1017,4 +1028,30 @@ void R_FlashlightStudioDone( void )
 	pglDepthMask( GL_TRUE );
 	pglDepthFunc( GL_LEQUAL );
 	GL_SetRenderMode( kRenderNormal );
+}
+
+/*
+=================
+R_FlashlightSuppressUnit
+
+set up `tmu` to sample the INVERTED flashlight cookie (1 - cookie), projected with the
+flashlight's own matrix, in MODULATE - so a caller multiplying by it scales its effect
+toward 0 inside the beam and leaves it untouched outside. Used by the entity-shadow
+pass so the flashlight overpowers (cancels) the ambient entity shadow where it shines.
+Returns false (and sets nothing) when the projected flashlight isn't active this frame.
+=================
+*/
+qboolean R_FlashlightSuppressUnit( int tmu )
+{
+	fl_params_t f = R_FlashlightParams();
+
+	if( !f.ok )
+		return false;
+
+	R_FlashlightUpdateCookie();	// cached; ensures fl_cookie_inv exists (entity shadows run before R_DrawFlashlight)
+	if( !fl_cookie_inv )
+		return false;
+
+	R_FlashlightProjUnit( tmu, fl_cookie_inv, f.texmat );
+	return true;
 }

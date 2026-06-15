@@ -2410,23 +2410,51 @@ culled via R_StudioCheckBBox: the beam points roughly where the player looks, so
 on-screen casters are the ones whose shadows land on visible surfaces.
 ===============
 */
-void R_StudioDrawShadowCasters( void )
+void R_StudioRenderDepthForEntity( cl_entity_t *e )
 {
 	cl_entity_t	*save_ent = RI.currententity;
 	model_t		*save_mod = RI.currentmodel;
-	int		i, bp;
+	int		bp;
 
-	if( !tr.draw_list )
+	if( !e->model || e->model->type != mod_studio )
 		return;
 
 	R_StudioSetupTimings();
+
+	RI.currententity = e;
+	RI.currentmodel = e->model;
+
+	R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model ));
+	if( m_pStudioHeader && m_pStudioHeader->numbodyparts != 0 )
+	{
+		R_StudioSetUpTransform( e );
+		if( R_StudioCheckBBox( ))
+		{
+			R_StudioSetupBones( e );
+
+			for( bp = 0; bp < m_pStudioHeader->numbodyparts; bp++ )
+			{
+				R_StudioSetupModel( bp, (void**)&m_pBodyPart, (void**)&m_pSubModel );
+				R_StudioDrawPointsDepth();
+			}
+		}
+	}
+
+	RI.currententity = save_ent;
+	RI.currentmodel = save_mod;
+}
+
+void R_StudioDrawShadowCasters( void )
+{
+	int	i;
+
+	if( !tr.draw_list )
+		return;
 
 	for( i = 0; i < tr.draw_list->num_solid_entities; i++ )
 	{
 		cl_entity_t *e = tr.draw_list->solid_entities[i];
 
-		if( !e->model || e->model->type != mod_studio )
-			continue;
 		if( e == tr.viewent || e->player )
 			continue;	// viewmodel / players (gait path) are not cast here
 		if( e->curstate.movetype == MOVETYPE_FOLLOW )
@@ -2434,30 +2462,242 @@ void R_StudioDrawShadowCasters( void )
 		if( !R_ModelOpaque( e->curstate.rendermode ))
 			continue;	// translucent models don't cast a solid shadow
 
-		RI.currententity = e;
-		RI.currentmodel = e->model;
+		R_StudioRenderDepthForEntity( e );
+	}
+}
 
-		R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model ));
-		if( !m_pStudioHeader )
-			continue;
+/*
+===============
+R_StampFillTri
 
-		R_StudioSetUpTransform( e );
-		if( !R_StudioCheckBBox( ))
-			continue;
-		if( m_pStudioHeader->numbodyparts == 0 )
-			continue;
+fill one triangle (coords already in coverage-bitmap space) with full coverage (255).
+Barycentric, winding-agnostic; max-keeps so overlapping triangles don't matter. The
+soft edge comes later from the box blur. (Same shape as the AO stamp rasterizer, but
+writes a caller-supplied buffer for the entity-shadow path.)
+===============
+*/
+static void R_StampFillTri( byte *cov, int size, const float a[2], const float b[2], const float c[2] )
+{
+	float d = ( b[0] - a[0] ) * ( c[1] - a[1] ) - ( b[1] - a[1] ) * ( c[0] - a[0] );
+	float invd;
+	int minx, maxx, miny, maxy, x, y;
 
-		R_StudioSetupBones( e );
+	if( d > -0.0001f && d < 0.0001f )
+		return;	// degenerate
+	invd = 1.0f / d;
 
-		for( bp = 0; bp < m_pStudioHeader->numbodyparts; bp++ )
+	minx = (int)floorf( Q_min( a[0], Q_min( b[0], c[0] )));
+	maxx = (int)ceilf ( Q_max( a[0], Q_max( b[0], c[0] )));
+	miny = (int)floorf( Q_min( a[1], Q_min( b[1], c[1] )));
+	maxy = (int)ceilf ( Q_max( a[1], Q_max( b[1], c[1] )));
+	if( minx < 0 ) minx = 0;
+	if( miny < 0 ) miny = 0;
+	if( maxx > size - 1 ) maxx = size - 1;
+	if( maxy > size - 1 ) maxy = size - 1;
+
+	for( y = miny; y <= maxy; y++ )
+	{
+		for( x = minx; x <= maxx; x++ )
 		{
-			R_StudioSetupModel( bp, (void**)&m_pBodyPart, (void**)&m_pSubModel );
-			R_StudioDrawPointsDepth();
+			float px = x + 0.5f, py = y + 0.5f;
+			float ba = (( c[0] - b[0] ) * ( py - b[1] ) - ( c[1] - b[1] ) * ( px - b[0] )) * invd;
+			float bb = (( a[0] - c[0] ) * ( py - c[1] ) - ( a[1] - c[1] ) * ( px - c[0] )) * invd;
+			float bc = (( b[0] - a[0] ) * ( py - a[1] ) - ( b[1] - a[1] ) * ( px - a[0] )) * invd;
+
+			if( ba >= 0.0f && bb >= 0.0f && bc >= 0.0f )
+				cov[y * size + x] = 255;
+		}
+	}
+}
+
+/*
+===============
+R_StudioPoseShadowVerts
+
+pose the current submodel's verts into g_studio.verts (positions only) - shared by
+the entity-shadow bounds + stamp passes. Same transform as R_StudioDrawPointsDepth.
+===============
+*/
+static void R_StudioPoseShadowVerts( void )
+{
+	byte	*pvertbone = ((byte *)m_pStudioHeader + m_pSubModel->vertinfoindex);
+	vec3_t	*pstudioverts = (vec3_t *)((byte *)m_pStudioHeader + m_pSubModel->vertindex);
+	int	vi;
+
+	if( FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) && m_pSubModel->blendvertinfoindex != 0 )
+	{
+		mstudioboneweight_t *pvertweight = (mstudioboneweight_t *)((byte *)m_pStudioHeader + m_pSubModel->blendvertinfoindex);
+		matrix3x4 skinMat;
+
+		for( vi = 0; vi < m_pSubModel->numverts; vi++ )
+		{
+			R_StudioComputeSkinMatrix( &pvertweight[vi], skinMat );
+			Matrix3x4_VectorTransform( skinMat, pstudioverts[vi], g_studio.verts[vi] );
+		}
+	}
+	else
+	{
+		for( vi = 0; vi < m_pSubModel->numverts; vi++ )
+			Matrix3x4_VectorTransform( g_studio.bonestransform[pvertbone[vi]], pstudioverts[vi], g_studio.verts[vi] );
+	}
+}
+
+/*
+===============
+R_StudioShadowBounds
+
+xash3d-streaming (entity shadows, soft path): pose entity `e` and measure its posed
+silhouette's extent in the light's view space (project verts by `view`, the light
+LookAt). Fills outmin/outmax (eye-space x,y). Lets the caller FIT the projection box
+to the actual pose - so an outstretched arm never spills past the coverage edge (which
+would clamp-smear the shadow to infinity). Returns false if nothing to measure.
+===============
+*/
+qboolean R_StudioShadowBounds( cl_entity_t *e, const float *view, float outmin[2], float outmax[2] )
+{
+	cl_entity_t	*save_ent = RI.currententity;
+	model_t		*save_mod = RI.currentmodel;
+	qboolean	any = false;
+	int		bp, vi;
+
+	if( !e->model || e->model->type != mod_studio )
+		return false;
+
+	R_StudioSetupTimings();
+	RI.currententity = e;
+	RI.currentmodel = e->model;
+
+	R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model ));
+	if( m_pStudioHeader && m_pStudioHeader->numbodyparts != 0 )
+	{
+		R_StudioSetUpTransform( e );
+		if( R_StudioCheckBBox( ))
+		{
+			R_StudioSetupBones( e );
+
+			outmin[0] = outmin[1] = 1.0e9f;
+			outmax[0] = outmax[1] = -1.0e9f;
+
+			for( bp = 0; bp < m_pStudioHeader->numbodyparts; bp++ )
+			{
+				R_StudioSetupModel( bp, (void**)&m_pBodyPart, (void**)&m_pSubModel );
+				R_StudioPoseShadowVerts();
+
+				for( vi = 0; vi < m_pSubModel->numverts; vi++ )
+				{
+					float *v = g_studio.verts[vi];
+					float x = view[0] * v[0] + view[4] * v[1] + view[8]  * v[2] + view[12];
+					float y = view[1] * v[0] + view[5] * v[1] + view[9]  * v[2] + view[13];
+
+					if( x < outmin[0] ) outmin[0] = x;
+					if( x > outmax[0] ) outmax[0] = x;
+					if( y < outmin[1] ) outmin[1] = y;
+					if( y > outmax[1] ) outmax[1] = y;
+					any = true;
+				}
+			}
 		}
 	}
 
 	RI.currententity = save_ent;
 	RI.currentmodel = save_mod;
+	return any;
+}
+
+/*
+===============
+R_StudioStampShadow
+
+xash3d-streaming (entity shadows, soft path): pose entity `e` and rasterize its
+silhouette - projected by `texmat` (world -> coverage [0,1], *size here) - into the
+coverage bitmap `cov` (size x size). The caller box-blurs + projects it. Poses the
+verts itself (this runs before the normal entity draw); returns false if nothing was
+rasterized.
+===============
+*/
+qboolean R_StudioStampShadow( cl_entity_t *e, const float *texmat, byte *cov, int size )
+{
+	cl_entity_t	*save_ent = RI.currententity;
+	model_t		*save_mod = RI.currentmodel;
+	qboolean	drew = false;
+	int		bp;
+
+	if( !e->model || e->model->type != mod_studio )
+		return false;
+
+	R_StudioSetupTimings();
+
+	RI.currententity = e;
+	RI.currentmodel = e->model;
+
+	R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model ));
+	if( !m_pStudioHeader || m_pStudioHeader->numbodyparts == 0 )
+	{
+		RI.currententity = save_ent;
+		RI.currentmodel = save_mod;
+		return false;
+	}
+
+	R_StudioSetUpTransform( e );
+	if( !R_StudioCheckBBox( ))
+	{
+		RI.currententity = save_ent;
+		RI.currentmodel = save_mod;
+		return false;
+	}
+
+	R_StudioSetupBones( e );
+
+	for( bp = 0; bp < m_pStudioHeader->numbodyparts; bp++ )
+	{
+		mstudiomesh_t	*pmesh;
+		int		j;
+
+		R_StudioSetupModel( bp, (void**)&m_pBodyPart, (void**)&m_pSubModel );
+		R_StudioPoseShadowVerts();
+
+		// project + rasterize each mesh triangle into the coverage bitmap
+		pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex);
+		for( j = 0; j < m_pSubModel->nummesh; j++ )
+		{
+			short	*ptricmds = (short *)((byte *)m_pStudioHeader + pmesh[j].triindex);
+			float	first[2] = { 0, 0 }, p1[2] = { 0, 0 }, p2[2] = { 0, 0 }, cur[2];
+			int	n, k;
+			qboolean fan;
+
+			while(( n = *( ptricmds++ )))
+			{
+				fan = ( n < 0 );
+				if( fan ) n = -n;
+
+				for( k = 0; k < n; k++, ptricmds += 4 )
+				{
+					float *av = g_studio.verts[ptricmds[0]];
+					float c0 = texmat[0] * av[0] + texmat[4] * av[1] + texmat[8]  * av[2] + texmat[12];
+					float c1 = texmat[1] * av[0] + texmat[5] * av[1] + texmat[9]  * av[2] + texmat[13];
+					float c3 = texmat[3] * av[0] + texmat[7] * av[1] + texmat[11] * av[2] + texmat[15];
+
+					if( c3 < 1e-6f && c3 > -1e-6f ) c3 = 1e-6f;
+					cur[0] = ( c0 / c3 ) * size;
+					cur[1] = ( c1 / c3 ) * size;
+
+					if( k == 0 ) { first[0] = cur[0]; first[1] = cur[1]; }
+					else if( k >= 2 )
+					{
+						if( fan ) R_StampFillTri( cov, size, first, p1, cur );
+						else R_StampFillTri( cov, size, p2, p1, cur );
+						drew = true;
+					}
+					p2[0] = p1[0]; p2[1] = p1[1];
+					p1[0] = cur[0]; p1[1] = cur[1];
+				}
+			}
+		}
+	}
+
+	RI.currententity = save_ent;
+	RI.currentmodel = save_mod;
+	return drew;
 }
 
 /*

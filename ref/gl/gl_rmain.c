@@ -978,6 +978,12 @@ void R_RenderScene( void )
 
 	R_DrawEntitiesOnList();
 
+	// entity shadows BEFORE the flashlight on purpose: the shadow multiply-darkens the
+	// baked floor, then the flashlight adds its beam on top at full strength - so a bright
+	// flashlight beam overpowers (washes out) the entity's ambient shadow, while a dim or
+	// edge-of-beam area leaves it visible. (Running it after would darken the beam itself.)
+	R_DrawEntityShadows();	// project per-entity shadow maps onto the world as darkening
+
 	R_DrawFlashlight();
 
 	R_DrawWaterSurfaces();
