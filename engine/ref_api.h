@@ -76,7 +76,7 @@ GNU General Public License for more details.
 // 17. _Mem_AllocPool now takes a flags argument (see MEM_SMALL_ALLOC_OPT in engine/common/common.h).
 //     Pools that opt into MEM_SMALL_ALLOC_OPT use a compact 16/24-byte header for allocations
 //     <= 255 bytes, dropping per-allocation filename/fileline tracking.
-#define REF_API_VERSION 17
+#define REF_API_VERSION 18
 
 #define TF_SKY		(TF_SKYSIDE|TF_NOMIPMAP|TF_ALLOW_NEAREST)
 #define TF_FONT		(TF_NOMIPMAP|TF_CLAMP|TF_ALLOW_NEAREST)
@@ -653,6 +653,10 @@ typedef struct ref_interface_s
 
 	// vgui drawing implementation
 	void	(*VGUI_SetupDrawing)( qboolean rect );
+
+	// read the current backbuffer as RGBA into a renderer-owned buffer (movie
+	// capture); returns the buffer + dimensions, bottom-up, or NULL if unsupported
+	byte	*(*R_GetFrameBuffer)( int *width, int *height );
 } ref_interface_t;
 
 typedef int (*REFAPI)( int version, ref_interface_t *pFunctionTable, ref_api_t* engfuncs, ref_globals_t *pGlobals );

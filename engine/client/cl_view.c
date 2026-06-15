@@ -572,6 +572,7 @@ void V_PostRender( void )
 	}
 
 	SCR_MakeScreenShot();
+	CL_MovieFrame(); // dump this frame if a movie is recording (before swap)
 	ref.dllFuncs.R_AllowFog( true );
 	Platform_SetTimer( 0.0f );
 	ref.dllFuncs.R_EndFrame();

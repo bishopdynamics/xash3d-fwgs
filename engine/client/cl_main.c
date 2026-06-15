@@ -3794,6 +3794,7 @@ void CL_Init( void )
 		return; // nothing running on the client
 
 	CL_InitLocal();
+	CL_InitMovie();	// startmovie/endmovie commands
 
 	VID_Init();	// init video
 

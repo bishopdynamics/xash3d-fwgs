@@ -822,3 +822,9 @@ qboolean GAME_EXPORT VID_ScreenShot( const char *filename, int shot_type )
 	return result;
 }
 
+// movie capture is GL-only; the software renderer doesn't support it
+byte *GAME_EXPORT R_GetFrameBuffer( int *width, int *height )
+{
+	return NULL;
+}
+

@@ -594,6 +594,43 @@ qboolean VID_ScreenShot( const char *filename, int shot_type )
 
 /*
 =================
+R_GetFrameBuffer
+
+Read the current backbuffer as RGBA into a persistent renderer-owned buffer for
+movie capture. Returns the buffer + dimensions; pixels are bottom-up (as
+glReadPixels returns them) so the caller flips (ffmpeg -vf vflip).
+=================
+*/
+byte *R_GetFrameBuffer( int *width, int *height )
+{
+	static byte	*buffer = NULL;
+	static size_t	buffer_size = 0;
+	int		w = gpGlobals->width;
+	int		h = gpGlobals->height;
+	size_t		need = (size_t)w * h * 4;
+
+	if( w <= 0 || h <= 0 )
+		return NULL;
+
+	if( need > buffer_size )
+	{
+		free( buffer );
+		buffer = malloc( need );
+		buffer_size = buffer ? need : 0;
+	}
+
+	if( !buffer )
+		return NULL;
+
+	pglReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buffer );
+
+	if( width ) *width = w;
+	if( height ) *height = h;
+	return buffer;
+}
+
+/*
+=================
 VID_CubemapShot
 =================
 */

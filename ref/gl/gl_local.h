@@ -484,6 +484,7 @@ void GL_InitExtensions( void );
 void GL_ClearExtensions( void );
 int GL_LoadTexture( const char *name, const byte *buf, size_t size, int flags );
 qboolean VID_ScreenShot( const char *filename, int shot_type );
+byte *R_GetFrameBuffer( int *width, int *height );
 qboolean VID_CubemapShot( const char *base, uint size, const float *vieworg, qboolean skyshot );
 void R_GammaChanged( qboolean do_reset_gamma );
 void R_BeginFrame( qboolean clearScene );

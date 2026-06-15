@@ -748,6 +748,7 @@ void CL_DemoCompleted( void )
 	CL_StopPlayback();
 
 	Con_Printf( "Demo playback ended\n" ); // marker for external capture tooling
+	CL_StopMovie(); // if capturing, close the movie stream so the encoder finishes
 
 	if( !CL_NextDemo() && !cls.changedemo )
 		UI_SetActiveMenu( true );

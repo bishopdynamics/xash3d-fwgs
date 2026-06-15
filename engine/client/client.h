@@ -968,6 +968,13 @@ void SCR_RegisterTextures( void );
 void SCR_LoadCreditsFont( void );
 void SCR_MakeScreenShot( void );
 void SCR_MakeLevelShot( void );
+
+//
+// cl_movie.c
+//
+void CL_InitMovie( void );
+void CL_MovieFrame( void );
+void CL_StopMovie( void );
 void SCR_NetSpeeds( void );
 void SCR_RSpeeds( void );
 void SCR_DrawFPS( int height );
