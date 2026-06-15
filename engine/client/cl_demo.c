@@ -731,6 +731,8 @@ static void CL_DemoStartPlayback( int mode )
 	cls.lastoutgoingcommand = -1;
  	cls.nextcmdtime = host.realtime;
 	cl.last_command_ack = -1;
+
+	Con_Printf( "Demo playback started\n" ); // marker for external capture tooling
 }
 
 /*
@@ -744,6 +746,8 @@ void CL_DemoCompleted( void )
 		cls.changedemo = true;
 
 	CL_StopPlayback();
+
+	Con_Printf( "Demo playback ended\n" ); // marker for external capture tooling
 
 	if( !CL_NextDemo() && !cls.changedemo )
 		UI_SetActiveMenu( true );

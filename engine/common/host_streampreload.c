@@ -345,6 +345,12 @@ void Host_QueueStreamPreload( void )
 			queued, sg_numnodes, chains, sg_numedges, ( Sys_DoubleTime() - t ) * 1000.0 );
 	}
 
+	// run streampreload_done.cfg (if present) once the queued world_preloads
+	// have all drained — a hook for tooling that needs the whole campaign warm
+	// first (sibling to maps/<map>_load.cfg). Absent/harmless in normal play.
+	if( FS_FileExists( "streampreload_done.cfg", false ))
+		Cbuf_AddText( "exec streampreload_done.cfg\n" );
+
 	Mem_Free( sg_nodes );
 	Mem_Free( sg_edges );
 	Mem_Free( search );
