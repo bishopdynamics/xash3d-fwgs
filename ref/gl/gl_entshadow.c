@@ -38,17 +38,17 @@ receiver pass lights world + brush surfaces only) - a TODO to revisit.
 #include "xash3d_mathlib.h"
 
 CVAR_DEFINE_AUTO( r_entity_shadows, "0", FCVAR_ARCHIVE, "dynamic shadows cast by entities (monsters/props/player) onto the world" );
-CVAR_DEFINE_AUTO( r_entity_shadows_max, "10", FCVAR_ARCHIVE, "max number of nearest entities that cast a shadow (performance cap)" );
+CVAR_DEFINE_AUTO( r_entity_shadows_max, "16", FCVAR_ARCHIVE, "max number of nearest entities that cast a shadow (performance cap)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_player, "1", FCVAR_ARCHIVE, "the player (and other players) cast entity shadows" );
 CVAR_DEFINE_AUTO( r_entity_shadows_strength, "0.4", FCVAR_ARCHIVE, "how dark entity shadows are (0 = none .. 1 = black)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_size, "256", FCVAR_ARCHIVE, "entity shadow coverage-map resolution in texels (square); higher = finer footprint, more CPU" );
-CVAR_DEFINE_AUTO( r_entity_shadows_softness, "8", FCVAR_ARCHIVE, "soften the shadow edge: box-blur radius in coverage texels (0 = hard)" );
+CVAR_DEFINE_AUTO( r_entity_shadows_softness, "6", FCVAR_ARCHIVE, "soften the shadow edge: box-blur radius in coverage texels (0 = hard)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_flashlight, "1", FCVAR_ARCHIVE, "the flashlight beam cancels (overpowers) entity shadows where it shines" );
 CVAR_DEFINE_AUTO( r_entity_shadows_debug, "0", 0, "draw entity shadow footprints in bright yellow (and ignore strength)" );
 
 #define ES_HARD_MAX	50	// absolute ceiling on casters per frame (matches r_entity_shadows_max max)
 #define ES_COV_MIN	64	// coverage-map resolution bounds (square texels). small: it's CPU-rasterized
-#define ES_COV_MAX	256	// and box-blurred every frame per caster
+#define ES_COV_MAX	1024	// and box-blurred every frame per caster (CPU; cost ~ res^2, so capped)
 #define ES_SOFT_MAX	24	// box-blur radius cap (texels)
 #define ES_NEAR		1.0f	// light near plane (units)
 

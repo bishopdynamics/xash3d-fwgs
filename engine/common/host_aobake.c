@@ -60,7 +60,7 @@ static const float ao_world_kernel[AO_WORLD_RAYS][3] =
 // bake-quality cvars live here, not in the renderer, because the renderer no
 // longer raycasts. dist changes the result so AO_CACHE_VERSION can't catch it;
 // the per-map header stores the dist it baked with and re-bakes on mismatch.
-static CVAR_DEFINE_AUTO( r_ao_world_dist, "72", FCVAR_ARCHIVE, "world-AO occlusion ray length in units (bake quality; re-bakes on change)" );
+static CVAR_DEFINE_AUTO( r_ao_world_dist, "64", FCVAR_ARCHIVE, "world-AO occlusion ray length in units (bake quality; re-bakes on change)" );
 static CVAR_DEFINE_AUTO( r_ao_autobake, "1", FCVAR_ARCHIVE, "bake any missing world-AO caches for the campaign at launch (1) or not (0)" );
 
 /*

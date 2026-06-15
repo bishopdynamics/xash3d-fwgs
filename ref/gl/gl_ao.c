@@ -50,7 +50,7 @@ CVAR_DEFINE_AUTO( r_ao_height, "16", FCVAR_ARCHIVE, "contact height falloff: mod
 CVAR_DEFINE_AUTO( r_ao_ground_dot, "0.7", FCVAR_ARCHIVE, "contact-AO ground confidence: minimum upward floor-normal (0..1); a steeper hit is treated as not-a-floor and AO is skipped rather than floated" );
 CVAR_DEFINE_AUTO( r_ao_debug, "0", 0, "debug: draw entity contact-AO footprints as solid PURPLE (no depth/blend), bypassing the normal gates" );
 CVAR_DEFINE_AUTO( r_ao_world, "1", FCVAR_ARCHIVE, "baked world AO: corner/recess shading on the world (0/1)" );
-CVAR_DEFINE_AUTO( r_ao_world_strength, "0.8", FCVAR_ARCHIVE, "baked world AO darkness (0 = off .. 1)" );
+CVAR_DEFINE_AUTO( r_ao_world_strength, "0.6", FCVAR_ARCHIVE, "baked world AO darkness (0 = off .. 1)" );
 CVAR_DEFINE_AUTO( r_ao_world_max, "0.6", FCVAR_ARCHIVE, "world-AO max occlusion (0..1): caps how dark a surface can get so tight gaps don't slam to black. live - no re-bake" );
 CVAR_DEFINE_AUTO( r_ao_world_debug, "0", 0, "debug: show baked world AO as HOT PINK in the lightmap (live, no re-bake)" );
 
