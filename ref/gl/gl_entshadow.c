@@ -58,7 +58,7 @@ typedef struct
 	float	texmat[16];	// bias * ortho * view : world -> coverage [0,1]^2 (+ depth in r)
 	vec3_t	center;		// receiver-cull sphere centre (world)
 	float	influence;	// receiver-cull sphere radius (world units)
-	float	rc;		// the caster centre's projected depth (r), for shadowed-side gating
+	vec3_t	ldir;		// light travel direction (receivers must face into it)
 } es_caster_t;
 
 static es_caster_t	es_casters[ES_HARD_MAX];
@@ -120,20 +120,6 @@ static void Mat4_LookAt( float *m, const vec3_t eye, const vec3_t fwd, const vec
 	m[1] = u[0]; m[5] = u[1]; m[9]  = u[2];  m[13] = -DotProduct( u, eye );
 	m[2] = -f[0]; m[6] = -f[1]; m[10] = -f[2]; m[14] = DotProduct( f, eye );
 	m[3] = 0.0f; m[7] = 0.0f; m[11] = 0.0f;  m[15] = 1.0f;
-}
-
-// project a world point by the column-major texmat -> (s,t in [0,1], r = depth)
-static void ES_Project( const float *m, const vec3_t p, float *s, float *t, float *r )
-{
-	float c0 = m[0] * p[0] + m[4] * p[1] + m[8]  * p[2] + m[12];
-	float c1 = m[1] * p[0] + m[5] * p[1] + m[9]  * p[2] + m[13];
-	float c2 = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
-	float c3 = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
-
-	if( c3 < 1e-6f && c3 > -1e-6f ) c3 = 1e-6f;
-	if( s ) *s = c0 / c3;
-	if( t ) *t = c1 / c3;
-	if( r ) *r = c2 / c3;
 }
 
 // separable box blur of the coverage bitmap (texture-space, so it genuinely smooths -
@@ -320,7 +306,7 @@ static qboolean R_EntityShadowPrepare( es_caster_t *c, cl_entity_t *e, int cov, 
 	Mat4_Mult( tmp, proj, view );
 	Mat4_Mult( c->texmat, bias, tmp );
 
-	ES_Project( c->texmat, c->center, NULL, NULL, &c->rc );
+	VectorCopy( L, c->ldir );
 
 	// CPU-rasterize the posed silhouette into the coverage bitmap, then blur it
 	memset( es_cov, 0, cov * cov );
@@ -439,14 +425,16 @@ static void R_EntityShadowReceiverSurf( msurface_t *surf, const matrix4x4 obj )
 	}
 }
 
-// receiver accepted if its centre is within the cull sphere AND on the shadowed side
-// of the caster (projected depth past the caster centre) - so the soft footprint isn't
-// painted onto the ceiling/surfaces between the light and the caster.
+// receiver accepted if its bounding sphere overlaps the cull sphere AND it FACES the
+// light. The facing test (not a per-face depth test) is what keeps the shadow off the
+// ceiling without skipping whole floor faces: a floor always faces an overhead light, so
+// every floor face receives - seamless across BSP splits (the old centre-depth gate
+// dropped faces whose centre fell on the light side, leaving shadow on only some tiles).
 static qboolean R_EntityShadowSurfReceives( msurface_t *surf, const es_caster_t *c )
 {
 	mextrasurf_t *info = surf->info;
-	vec3_t center, ext, delta;
-	float r, sr;
+	vec3_t center, ext, delta, n;
+	float sr;
 
 	VectorAverage( info->mins, info->maxs, center );
 	VectorSubtract( center, c->center, delta );
@@ -455,9 +443,12 @@ static qboolean R_EntityShadowSurfReceives( msurface_t *surf, const es_caster_t 
 	if( DotProduct( delta, delta ) > sr * sr )
 		return false;
 
-	ES_Project( c->texmat, center, NULL, NULL, &r );
-	if( r < c->rc )
-		return false;	// in front of the caster (light side) - would paint the ceiling
+	VectorCopy( surf->plane->normal, n );
+	if( FBitSet( surf->flags, SURF_PLANEBACK ))
+		VectorNegate( n, n );
+	if( DotProduct( n, c->ldir ) >= -0.01f )
+		return false;	// faces away from / perpendicular to the light (e.g. the ceiling)
+
 	return true;
 }
 
