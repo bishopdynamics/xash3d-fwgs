@@ -34,7 +34,7 @@ static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font textur
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
 static CVAR_DEFINE_AUTO( con_color, "240 180 24", FCVAR_ARCHIVE, "set a custom console color" );
 static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
-static CVAR_DEFINE_AUTO( scr_drawmapname, "1", FCVAR_ARCHIVE, "draw current map name in the bottom right corner while in game" );
+static CVAR_DEFINE_AUTO( scr_drawmapname, "0", FCVAR_ARCHIVE, "draw current map name in the bottom right corner while in game" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );
 
