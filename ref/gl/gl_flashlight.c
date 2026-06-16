@@ -44,6 +44,7 @@ CVAR_DEFINE_AUTO( r_flashlight_shadows, "1", FCVAR_ARCHIVE, "flashlight casts dy
 CVAR_DEFINE_AUTO( r_flashlight_shadow_size, "512", FCVAR_ARCHIVE, "shadow-map resolution in texels (square); higher = crisper shadow edges, more GPU. clamped to the back-buffer size" );
 CVAR_DEFINE_AUTO( r_flashlight_shadow_slopebias, "3.0", FCVAR_ARCHIVE, "shadow depth bias scaled by surface slope; raise to kill grazing-angle self-shadow banding, lower if shadows detach (peter-panning)" );
 CVAR_DEFINE_AUTO( r_flashlight_shadow_bias, "2.0", FCVAR_ARCHIVE, "constant shadow depth bias (units); the flat baseline added on top of the slope bias" );
+CVAR_DEFINE_AUTO( r_flashlight_shadow_normaloffset, "2.0", FCVAR_ARCHIVE, "push the shadow lookup this many units along the receiver's surface normal; fixes grazing-angle banding the depth bias can't (light-parallel surfaces), without peter-panning. 0 = off" );
 CVAR_DEFINE_AUTO( r_flashlight_offset, "4", FCVAR_ARCHIVE, "vertical light offset from the eye: +above (headlamp) / -below (parallax for shadows); clamped -20..20" );
 CVAR_DEFINE_AUTO( r_flashlight_debug, "0", 0, "debug: draw the raw projected cookie (no albedo/attenuation/NdotL)" );
 
@@ -298,6 +299,7 @@ void R_InitFlashlight( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_size );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_slopebias );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_bias );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_normaloffset );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_offset );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_debug );
 }
@@ -566,7 +568,52 @@ drop out. `*alpha_on` carries the masked GL state across calls (surfaces aren't
 sorted, so it toggles only on change).
 =================
 */
-static void R_FlashlightLightSurf( msurface_t *surf, const matrix4x4 obj, qboolean albedo, float pass_intensity, qboolean *alpha_on )
+/*
+=================
+R_FlashlightShadowNormalOffset
+
+Normal-offset bias: bend the SHADOW unit's projective lookup so it samples at
+(vertex + surface_normal * offset) instead of right on the surface. Depth bias
+slides the comparison along the light ray, which does nothing for a surface that
+lies nearly along the ray (the extreme grazing case) - there the normal points
+across the ray, so a push along it is exactly the direction that escapes the
+surface's own depth. Folded into the object-plane texgen w terms (coord =
+plane . (vert,1)), so only the shadow lookup moves - the lit/visible geometry and
+the cookie/atten units are untouched. `obj` rotates the model-local normal into
+world space for brush entities (NULL = worldspawn, already world-space).
+=================
+*/
+static void R_FlashlightShadowNormalOffset( int shadow_tmu, msurface_t *surf, const matrix4x4 obj, float offset )
+{
+	vec3_t n;
+	float planeS[4] = { 1, 0, 0, 0 };
+	float planeT[4] = { 0, 1, 0, 0 };
+	float planeR[4] = { 0, 0, 1, 0 };
+
+	if( !surf->plane )
+		return;
+
+	VectorCopy( surf->plane->normal, n );
+	if( FBitSet( surf->flags, SURF_PLANEBACK ))
+		VectorNegate( n, n );
+	if( obj )
+	{
+		vec3_t world_n;
+		Matrix4x4_VectorRotate( obj, n, world_n );
+		VectorCopy( world_n, n );
+	}
+
+	planeS[3] = n[0] * offset;
+	planeT[3] = n[1] * offset;
+	planeR[3] = n[2] * offset;
+
+	GL_SelectTexture( shadow_tmu );
+	pglTexGenfv( GL_S, GL_OBJECT_PLANE, planeS );
+	pglTexGenfv( GL_T, GL_OBJECT_PLANE, planeT );
+	pglTexGenfv( GL_R, GL_OBJECT_PLANE, planeR );
+}
+
+static void R_FlashlightLightSurf( msurface_t *surf, const matrix4x4 obj, qboolean albedo, float pass_intensity, qboolean *alpha_on, int shadow_tmu, float normaloffset )
 {
 	glpoly2_t *p = surf->polys;
 	qboolean dbg = r_flashlight_debug.value != 0.0f;
@@ -594,6 +641,10 @@ static void R_FlashlightLightSurf( msurface_t *surf, const matrix4x4 obj, qboole
 		texture_t *t = surf->texinfo && surf->texinfo->texture ? surf->texinfo->texture : NULL;
 		GL_Bind( 0, t ? t->gl_texturenum : tr.whiteTexture );
 	}
+
+	// per-face normal-offset bias on the shadow lookup (grazing-angle acne fix)
+	if( shadow_tmu >= 0 && normaloffset != 0.0f )
+		R_FlashlightShadowNormalOffset( shadow_tmu, surf, obj, normaloffset );
 
 	for( ; p; p = p->next )
 	{
@@ -631,7 +682,7 @@ platforms/offset func_walls used to go dark: the world cookie loop skipped them
 positions. Masked entities (ladders/grates) are alpha-tested via R_FlashlightLightSurf.
 =================
 */
-static void R_FlashlightBrushSurfaces( cl_entity_t *e, qboolean albedo, float pass_intensity, qboolean *alpha_on )
+static void R_FlashlightBrushSurfaces( cl_entity_t *e, qboolean albedo, float pass_intensity, qboolean *alpha_on, int shadow_tmu, float normaloffset )
 {
 	model_t *m = e->model;
 	matrix4x4 obj;
@@ -640,7 +691,7 @@ static void R_FlashlightBrushSurfaces( cl_entity_t *e, qboolean albedo, float pa
 	Matrix4x4_CreateFromEntity( obj, e->angles, e->origin, 1.0f );
 
 	for( i = 0; i < m->nummodelsurfaces; i++ )
-		R_FlashlightLightSurf( &m->surfaces[m->firstmodelsurface + i], obj, albedo, pass_intensity, alpha_on );
+		R_FlashlightLightSurf( &m->surfaces[m->firstmodelsurface + i], obj, albedo, pass_intensity, alpha_on, shadow_tmu, normaloffset );
 }
 
 /*
@@ -750,6 +801,7 @@ static void R_DrawFlashlightSurfaces( const fl_params_t *f, qboolean albedo, qbo
 	int cookie_tmu = next++;			// cone cross-section
 	int atten_tmu = next++;				// distance falloff along the beam
 	int shadow_tmu = ( shadows && fl_depth ) ? next++ : -1;
+	float normaloffset = ( shadow_tmu >= 0 ) ? r_flashlight_shadow_normaloffset.value : 0.0f;
 	float attenmat[16];
 	qboolean alpha_on = false;	// tracks the masked (alpha-test) GL state across the surface/entity loops
 	int i;
@@ -784,7 +836,7 @@ static void R_DrawFlashlightSurfaces( const fl_params_t *f, qboolean albedo, qbo
 		if( !R_FlashlightSurfaceVisible( surf, f->origin, f->fwd, f->range ))
 			continue;
 
-		R_FlashlightLightSurf( surf, NULL, albedo, pass_intensity, &alpha_on );
+		R_FlashlightLightSurf( surf, NULL, albedo, pass_intensity, &alpha_on, shadow_tmu, normaloffset );
 	}
 
 	// brush entities lit at their current transform. Opaque doors/walls (kRenderNormal)
@@ -812,7 +864,7 @@ static void R_DrawFlashlightSurfaces( const fl_params_t *f, qboolean albedo, qbo
 					continue;
 				if( !R_FlashlightBrushVisible( ent, f ))
 					continue;
-				R_FlashlightBrushSurfaces( ent, albedo, pass_intensity, &alpha_on );
+				R_FlashlightBrushSurfaces( ent, albedo, pass_intensity, &alpha_on, shadow_tmu, normaloffset );
 			}
 		}
 	}
