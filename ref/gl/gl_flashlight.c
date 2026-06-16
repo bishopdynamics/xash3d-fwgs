@@ -42,6 +42,8 @@ CVAR_DEFINE_AUTO( r_flashlight_range, "3000", FCVAR_ARCHIVE, "flashlight maximum
 CVAR_DEFINE_AUTO( r_flashlight_albedo, "1", FCVAR_ARCHIVE, "modulate the cone by the surface texture (1) or flat-add (0)" );
 CVAR_DEFINE_AUTO( r_flashlight_shadows, "1", FCVAR_ARCHIVE, "flashlight casts dynamic shadows (shadow map)" );
 CVAR_DEFINE_AUTO( r_flashlight_shadow_size, "512", FCVAR_ARCHIVE, "shadow-map resolution in texels (square); higher = crisper shadow edges, more GPU. clamped to the back-buffer size" );
+CVAR_DEFINE_AUTO( r_flashlight_shadow_slopebias, "3.0", FCVAR_ARCHIVE, "shadow depth bias scaled by surface slope; raise to kill grazing-angle self-shadow banding, lower if shadows detach (peter-panning)" );
+CVAR_DEFINE_AUTO( r_flashlight_shadow_bias, "2.0", FCVAR_ARCHIVE, "constant shadow depth bias (units); the flat baseline added on top of the slope bias" );
 CVAR_DEFINE_AUTO( r_flashlight_offset, "4", FCVAR_ARCHIVE, "vertical light offset from the eye: +above (headlamp) / -below (parallax for shadows); clamped -20..20" );
 CVAR_DEFINE_AUTO( r_flashlight_debug, "0", 0, "debug: draw the raw projected cookie (no albedo/attenuation/NdotL)" );
 
@@ -64,6 +66,14 @@ static int fl_atten = 0;	// distance-falloff ramp along the beam
 static int fl_depth = 0;	// shadow-map depth texture
 static int fl_depth_size = 0;	// current side length of fl_depth (tracks r_flashlight_shadow_size)
 
+// per-frame scene-fit depth range for the SHADOW projection (acne/moire fix).
+// Cached on tr.framecount so the early depth pass and the later receiver pass
+// read identical near/far (their depth values must match) and the O(surfaces)
+// scan runs once per frame.
+static int   fl_fit_frame = -1;
+static float fl_fit_near = FL_NEAR;
+static float fl_fit_far = 0.0f;
+
 typedef struct
 {
 	qboolean	ok;
@@ -73,6 +83,8 @@ typedef struct
 	float		proj[16];	// light projection (GL column-major)
 	float		view[16];	// light view
 	float		texmat[16];	// bias * proj * view : world -> [0,1]^3
+	float		shadow_proj[16];	// like proj, but with the per-frame scene-fit near/far
+	float		shadow_texmat[16];	// bias * shadow_proj * view (shadow-map depth space)
 } fl_params_t;
 
 /*
@@ -284,8 +296,92 @@ void R_InitFlashlight( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_albedo );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadows );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_size );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_slopebias );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_bias );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_offset );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_debug );
+}
+
+static qboolean R_FlashlightSurfaceVisible( msurface_t *surf, const vec3_t origin, const vec3_t fwd, float range );
+
+/*
+=================
+R_FlashlightFitShadowRange
+
+Scan the world surfaces the shadow pass will actually rasterize (same cone/range
+cull) and return the near/far that tightly bound them along the beam axis. A
+flashlight frustum fixed at 24..3000 packs almost all of its depth precision into
+the first few feet, leaving the rest as coarse steps -> self-shadow acne (the
+moire on lit surfaces, worse up close). Fitting far to the nearest wall the beam
+actually hits (a few hundred units in HL corridors) collapses the near/far ratio
+and restores precision across the whole usable range.
+
+Cached on tr.framecount: the early depth-render pass and the later receiver pass
+both call this and MUST get identical matrices (their depth values are compared),
+and the O(surfaces) scan should run only once per frame. Used ONLY for the shadow
+projection - the cookie/atten keep the fixed range so the beam never breathes.
+=================
+*/
+static void R_FlashlightFitShadowRange( const vec3_t origin, const vec3_t fwd, float range, float *out_near, float *out_far )
+{
+	model_t *world = WORLDMODEL;
+	float nearest = range, farthest = FL_NEAR;
+	int found = 0;
+	int i;
+
+	if( fl_fit_frame == tr.framecount )
+	{
+		*out_near = fl_fit_near;
+		*out_far = fl_fit_far;
+		return;
+	}
+
+	for( i = world->firstmodelsurface; i < world->firstmodelsurface + world->nummodelsurfaces; i++ )
+	{
+		msurface_t *surf = &world->surfaces[i];
+		mextrasurf_t *info;
+		vec3_t center, delta;
+		float along, radius;
+
+		if( !surf->polys )
+			continue;
+		if( FBitSet( surf->flags, SURF_DRAWSKY | SURF_DRAWTURB | SURF_DRAWTURB_QUADS ))
+			continue;
+		if( !R_FlashlightSurfaceVisible( surf, origin, fwd, range ))
+			continue;
+
+		info = surf->info;
+		VectorAverage( info->mins, info->maxs, center );
+		VectorSubtract( center, origin, delta );
+		along = DotProduct( delta, fwd );
+		VectorSubtract( info->maxs, center, delta );
+		radius = VectorLength( delta );
+
+		if( along - radius < nearest )  nearest = along - radius;
+		if( along + radius > farthest ) farthest = along + radius;
+		found++;
+	}
+
+	if( found )
+	{
+		// margins absorb the bbox-sphere slop and any brush-entity/studio caster a
+		// little past the world fit. Floor near at FL_NEAR for precision and to keep
+		// close dynamic casters in front of the plane (cap its rise at 96 so a monster
+		// a couple of feet away still casts); never exceed the configured range.
+		nearest -= 16.0f;
+		farthest += 64.0f;
+		fl_fit_near = bound( FL_NEAR, nearest, 96.0f );
+		fl_fit_far = bound( fl_fit_near + 64.0f, farthest, range );
+	}
+	else
+	{
+		fl_fit_near = FL_NEAR;
+		fl_fit_far = range;
+	}
+
+	fl_fit_frame = tr.framecount;
+	*out_near = fl_fit_near;
+	*out_far = fl_fit_far;
 }
 
 /*
@@ -353,6 +449,26 @@ static fl_params_t R_FlashlightParams( void )
 	Mat4_LookAt( f.view, f.origin, f.fwd, up );
 	Mat4_Mult( tmp, f.proj, f.view );
 	Mat4_Mult( f.texmat, bias, tmp );
+
+	// The shadow map gets its own projection with a per-frame scene-fit near/far so
+	// its depth precision isn't blown on empty distance (self-shadow acne / moire).
+	// The cookie + atten above deliberately keep the FIXED FL_NEAR..range, so the
+	// beam's visual length and falloff never change as the fit adapts.
+	if( r_flashlight_shadows.value )
+	{
+		float fnear, ffar, sproj[16];
+
+		R_FlashlightFitShadowRange( f.origin, f.fwd, f.range, &fnear, &ffar );
+		Mat4_Perspective( sproj, cone, 1.0f, fnear, ffar );
+		memcpy( f.shadow_proj, sproj, sizeof( sproj ));
+		Mat4_Mult( tmp, sproj, f.view );
+		Mat4_Mult( f.shadow_texmat, bias, tmp );
+	}
+	else
+	{
+		memcpy( f.shadow_proj, f.proj, sizeof( f.proj ));
+		memcpy( f.shadow_texmat, f.texmat, sizeof( f.texmat ));
+	}
 
 	f.ok = true;
 	return f;
@@ -650,7 +766,7 @@ static void R_DrawFlashlightSurfaces( const fl_params_t *f, qboolean albedo, qbo
 	R_FlashlightAttenMatrix( f->texmat, attenmat );
 	R_FlashlightProjUnit( atten_tmu, fl_atten, attenmat );
 	if( shadow_tmu >= 0 )
-		R_FlashlightProjUnit( shadow_tmu, fl_depth, f->texmat );
+		R_FlashlightProjUnit( shadow_tmu, fl_depth, f->shadow_texmat );
 
 	// only the static worldspawn faces here; brush entities (doors/func_walls/ladders)
 	// are lit separately below, transformed to their current position. (Iterating the
@@ -755,7 +871,7 @@ void R_FlashlightShadowPass( void )
 	pglViewport( 0, 0, S, S );
 	pglMatrixMode( GL_PROJECTION );
 	pglPushMatrix();
-	pglLoadMatrixf( f.proj );
+	pglLoadMatrixf( f.shadow_proj );	// scene-fit near/far (precision; kills acne)
 	pglMatrixMode( GL_MODELVIEW );
 	pglPushMatrix();
 	pglLoadMatrixf( f.view );
@@ -782,7 +898,11 @@ void R_FlashlightShadowPass( void )
 	// like they come from the back of stairs). Recording every face + LEQUAL keeps
 	// the nearest surface to the light, which is what the shadow test wants.
 	GL_Cull( 0 );
-	GL_PushPolygonOffset( 1.0f, 2.0f );
+	// slope-scaled depth bias: factor*slope keeps grazing faces (where one shadow
+	// texel spans a big depth range) from self-shadowing into bands; units is the
+	// flat baseline. Both tunable live - raise slopebias until the grazing banding
+	// clears, back off if shadows start detaching from their casters (peter-panning).
+	GL_PushPolygonOffset( Q_max( 0.0f, r_flashlight_shadow_slopebias.value ), Q_max( 0.0f, r_flashlight_shadow_bias.value ));
 
 	// only worldspawn (static) geometry casts shadows. WORLDMODEL->surfaces is the
 	// WHOLE BSP face array (worldspawn + every brush-entity submodel), so iterating
