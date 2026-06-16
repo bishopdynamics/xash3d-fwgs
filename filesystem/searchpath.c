@@ -444,6 +444,12 @@ void FS_Rescan( uint32_t flags, const char *language )
 	if( !COM_StringEmptyOrNULL( str ))
 		FS_MountArchive_Fullpath( str, FS_NOWRITE_PATH | FS_CUSTOM_PATH );
 
+	// Continuum's own always-mounted content dir: the shared menu assets (fonts,
+	// glyphs, brand mark, pill/dot) and the composed per-game backgrounds live here,
+	// so they resolve from every game without being mixed into valve. Added first =
+	// lowest priority (never shadows game content); read-only (never the write path).
+	FS_AddGameDirectory( "continuum/", FS_NOWRITE_PATH | FS_CUSTOM_PATH );
+
 	if( Q_stricmp( GI->basedir, GI->gamefolder ))
 		FS_AddGameHierarchy( GI->basedir, flags );
 

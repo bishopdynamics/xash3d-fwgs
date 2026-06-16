@@ -579,6 +579,7 @@ void Host_AbortCurrentFrame( void ) NORETURN;
 void Host_QueueStreamPreload( void );
 void Host_InitAOBake( void );
 void Host_AutoBakeAO( void );
+void Host_AutoComposeBackground( void );
 void Host_WriteServerConfig( const char *name );
 void Host_WriteOpenGLConfig( void );
 void Host_WriteVideoConfig( void );

@@ -1315,6 +1315,10 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		// gone and toggling AO on later needs no bake.
 		Host_AutoBakeAO();
 
+		// compose this game's menu-background PNG from its tiles/splash if missing,
+		// so the Continuum menu's per-game backdrop works without an offline tool
+		Host_AutoComposeBackground();
+
 		// xash3d-streaming: warm the residency cache for the whole campaign.
 		// Runs after the configs above have decided host_level_streaming.
 		// The engine derives the preload order from the game's own maps
