@@ -76,6 +76,7 @@ int EXPORT GetRefAPI( int version, ref_interface_t *funcs, ref_api_t *engfuncs, 
 
 	gEngfuncs.Cvar_RegisterVariable( &r_dlight_virtual_radius );
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_extended );
+	gEngfuncs.Cvar_RegisterVariable( &r_lighting_filter );
 
 	return REF_API_VERSION;
 }

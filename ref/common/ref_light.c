@@ -20,6 +20,7 @@ GNU General Public License for more details.
 
 CVAR_DEFINE_AUTO( r_dlight_virtual_radius, "3", FCVAR_GLCONFIG, "increase dlight radius virtually by this amount" );
 CVAR_DEFINE_AUTO( r_lighting_extended, "1", FCVAR_GLCONFIG, "allow to get lighting from world and bmodels" );
+CVAR_DEFINE_AUTO( r_lighting_filter, "1", FCVAR_ARCHIVE, "bilinear-filter the point lightmap sample (entities/sprites) so moving models don't pop between luxels (1); 0 = legacy nearest luxel" );
 
 /*
 ==================
@@ -216,6 +217,32 @@ static float	g_trace_fraction;
 
 /*
 =================
+R_LightmapBilinear
+
+Bilinearly blend the four luxels around (s,t) in one color24 luxel grid
+(smax wide). Corner indices are pre-clamped to the grid by the caller; out[]
+is per-channel in [0,255]. Used by r_lighting_filter to smooth the point
+lightmap sample the same way the GPU filters world-surface lightmaps.
+=================
+*/
+static void R_LightmapBilinear( const color24 *grid, int smax, int s0, int s1, int t0, int t1, float fs, float ft, float out[3] )
+{
+	const color24 *c00 = grid + t0 * smax + s0;
+	const color24 *c10 = grid + t0 * smax + s1;
+	const color24 *c01 = grid + t1 * smax + s0;
+	const color24 *c11 = grid + t1 * smax + s1;
+	float	w00 = ( 1.0f - fs ) * ( 1.0f - ft );
+	float	w10 = fs * ( 1.0f - ft );
+	float	w01 = ( 1.0f - fs ) * ft;
+	float	w11 = fs * ft;
+
+	out[0] = c00->r * w00 + c10->r * w10 + c01->r * w01 + c11->r * w11;
+	out[1] = c00->g * w00 + c10->g * w10 + c01->g * w01 + c11->g * w11;
+	out[2] = c00->b * w00 + c10->b * w10 + c01->b * w01 + c11->b * w11;
+}
+
+/*
+=================
 R_RecursiveLightPoint
 =================
 */
@@ -297,7 +324,23 @@ start:
 
 		g_trace_fraction = midf;
 
-		const color24 *lm = surf->samples + Q_rint( dt ) * smax + Q_rint( ds );
+		// Nearest-luxel sampling (Q_rint) makes a moving model's lightmap value
+		// step in ~sample_size-unit jumps, so an entity "pops" between light
+		// levels as it walks — while the floor under it (GPU-bilinear) stays
+		// smooth. r_lighting_filter blends the 4 surrounding luxels instead, the
+		// same filtering the GPU gives world surfaces. 0 = legacy nearest luxel.
+		const qboolean filter = ( r_lighting_filter.value != 0.0f );
+		const int ni = Q_rint( dt ) * smax + Q_rint( ds );	// nearest-luxel offset
+
+		// bilinear corners + fractional weights, clamped to the luxel grid.
+		// ds,dt are >= 0 here (guarded above), so the int cast is a floor.
+		int s0 = (int)ds, t0 = (int)dt;
+		float fs = ds - s0, ft = dt - t0;
+		if( s0 > smax - 1 ) { s0 = smax - 1; fs = 0.0f; }
+		if( t0 > tmax - 1 ) { t0 = tmax - 1; ft = 0.0f; }
+		const int s1 = ( s0 + 1 < smax ) ? s0 + 1 : s0;
+		const int t1 = ( t0 + 1 < tmax ) ? t0 + 1 : t0;
+
 		const color24 *dm = NULL;
 		matrix3x4 tbn;
 
@@ -305,7 +348,7 @@ start:
 		{
 			vec3_t	faceNormal;
 
-			dm = surf->info->deluxemap + Q_rint( dt ) * smax + Q_rint( ds );
+			dm = surf->info->deluxemap;
 
 			if( FBitSet( surf->flags, SURF_PLANEBACK ))
 				VectorNegate( surf->plane->normal, faceNormal );
@@ -331,29 +374,49 @@ start:
 		for( int map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 		{
 			uint	scale = g_lightstylevalue[surf->styles[map]];
+			const color24 *lm = surf->samples + map * size;	// this style's luxel grid
 
-			cv->r += lm->r * scale;
-			cv->g += lm->g * scale;
-			cv->b += lm->b * scale;
+			if( filter )
+			{
+				float rgb[3];
 
-			lm += size; // skip to next lightmap
+				R_LightmapBilinear( lm, smax, s0, s1, t0, t1, fs, ft, rgb );
+				cv->r += (uint)( rgb[0] * scale );
+				cv->g += (uint)( rgb[1] * scale );
+				cv->b += (uint)( rgb[2] * scale );
+			}
+			else
+			{
+				cv->r += lm[ni].r * scale;
+				cv->g += lm[ni].g * scale;
+				cv->b += lm[ni].b * scale;
+			}
 
 			if( dm != NULL )
 			{
+				const color24 *dgrid = dm + map * size;	// this style's deluxe grid
 				const float f = (1.0f / 128.0f);
-				vec3_t srcNormal =
-				{
-					((float)dm->r - 128.0f) * f,
-					((float)dm->g - 128.0f) * f,
-					((float)dm->b - 128.0f) * f,
-				};
-				vec3_t lightNormal;
+				vec3_t srcNormal, lightNormal;
 
+				if( filter )
+				{
+					float drgb[3];
+
+					R_LightmapBilinear( dgrid, smax, s0, s1, t0, t1, fs, ft, drgb );
+					srcNormal[0] = ( drgb[0] - 128.0f ) * f;
+					srcNormal[1] = ( drgb[1] - 128.0f ) * f;
+					srcNormal[2] = ( drgb[2] - 128.0f ) * f;
+				}
+				else
+				{
+					srcNormal[0] = ( (float)dgrid[ni].r - 128.0f ) * f;
+					srcNormal[1] = ( (float)dgrid[ni].g - 128.0f ) * f;
+					srcNormal[2] = ( (float)dgrid[ni].b - 128.0f ) * f;
+				}
 
 				Matrix3x4_VectorIRotate( tbn, srcNormal, lightNormal );		// turn to world space
 				VectorScale( lightNormal, (float)scale * -1.0f, lightNormal );	// turn direction from light
 				VectorAdd( g_trace_lightvec, lightNormal, g_trace_lightvec );
-				dm += size; // skip to next deluxmap
 			}
 		}
 
