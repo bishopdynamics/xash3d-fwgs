@@ -45,7 +45,8 @@ CVAR_DEFINE_AUTO( r_flashlight_shadow_size, "512", FCVAR_ARCHIVE, "shadow-map re
 CVAR_DEFINE_AUTO( r_flashlight_shadow_slopebias, "3.0", FCVAR_ARCHIVE, "shadow depth bias scaled by surface slope; raise to kill grazing-angle self-shadow banding, lower if shadows detach (peter-panning)" );
 CVAR_DEFINE_AUTO( r_flashlight_shadow_bias, "2.0", FCVAR_ARCHIVE, "constant shadow depth bias (units); the flat baseline added on top of the slope bias" );
 CVAR_DEFINE_AUTO( r_flashlight_shadow_normaloffset, "2.0", FCVAR_ARCHIVE, "push the shadow lookup this many units along the receiver's surface normal; fixes grazing-angle banding the depth bias can't (light-parallel surfaces), without peter-panning. 0 = off" );
-CVAR_DEFINE_AUTO( r_flashlight_offset, "4", FCVAR_ARCHIVE, "vertical light offset from the eye: +above (headlamp) / -below (parallax for shadows); clamped -20..20" );
+CVAR_DEFINE_AUTO( r_flashlight_offset, "-4", FCVAR_ARCHIVE, "vertical light offset from the eye: +above (headlamp) / -below (chest, parallax for shadows); clamped -24..24" );
+CVAR_DEFINE_AUTO( r_flashlight_offset_h, "-4", FCVAR_ARCHIVE, "horizontal light offset from the eye: +right (shoulder) / -left; 0 = centered (chest); clamped -24..24" );
 CVAR_DEFINE_AUTO( r_flashlight_debug, "0", 0, "debug: draw the raw projected cookie (no albedo/attenuation/NdotL)" );
 
 #define FL_MAX_PASSES	6	// intensity cap: each whole unit of intensity is one additive pass
@@ -301,6 +302,7 @@ void R_InitFlashlight( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_bias );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_shadow_normaloffset );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_offset );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_offset_h );
 	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_debug );
 }
 
@@ -419,18 +421,26 @@ static fl_params_t R_FlashlightParams( void )
 	// mounted light co-located with the camera hides every shadow behind its own
 	// caster; a modest offset gives the parallax that makes shadows visible while
 	// keeping the cone roughly where the player is looking. the offset is WORLD-
-	// down (+ a little world-horizontal-right) and clamped, so it stays a fixed
-	// height below the eye no matter where you look and never sinks into the floor.
+	// vertical + WORLD-horizontal-right and clamped, so it stays a fixed distance
+	// from the eye no matter where you look and never sinks into the floor.
 	{
-		float up = bound( -20.0f, r_flashlight_offset.value, 20.0f );	// + above (headlamp), - below
+		float voff = bound( -24.0f, r_flashlight_offset.value,   24.0f );	// + above (headlamp), - below (chest)
+		float hoff = bound( -24.0f, r_flashlight_offset_h.value, 24.0f );	// + right (shoulder), - left
+		vec3_t right_h;
 
-		// The vertical offset shifts the light off the eye for shadow parallax (kept
-		// small: too far below + crouching sinks the light through the floor). The
-		// FIXED backward step is separate - it keeps the projection's q=0 plane behind
+		// keep the sideways step in the world horizontal plane (zero Z, renormalize)
+		// so a shoulder offset stays level and doesn't drift up/down with view pitch.
+		VectorSet( right_h, RI.vright[0], RI.vright[1], 0.0f );
+		VectorNormalize( right_h );
+
+		// The offset shifts the light off the eye for shadow parallax (kept small:
+		// too far below + crouching sinks the light through the floor). The FIXED
+		// backward step is separate - it keeps the projection's q=0 plane behind
 		// everything visible, so a large floor polygon crossing it never shows a hard
 		// straight edge; decoupling it means signed offsets are safe.
 		VectorCopy( RI.rvp.vieworigin, f.origin );
-		f.origin[2] += up;					// + raises the light above the eye
+		f.origin[2] += voff;					// + raises the light above the eye
+		VectorMA( f.origin, hoff, right_h, f.origin );		// + shifts it to the player's right
 		VectorMA( f.origin, -28.0f, RI.vforward, f.origin );	// fixed backward
 	}
 
