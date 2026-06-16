@@ -45,6 +45,7 @@ CVAR_DEFINE_AUTO( r_entity_shadows_strength, "0.4", FCVAR_ARCHIVE, "how dark ent
 CVAR_DEFINE_AUTO( r_entity_shadows_size, "256", FCVAR_ARCHIVE, "entity shadow coverage-map resolution in texels (square); higher = finer footprint, more CPU" );
 CVAR_DEFINE_AUTO( r_entity_shadows_softness, "6", FCVAR_ARCHIVE, "soften the shadow edge: box-blur radius in coverage texels (0 = hard)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_floor, "48", FCVAR_ARCHIVE, "lock the shadow to the ground plane the caster stands on; reject surfaces this many units off that plane, or facing differently (0 = no lock)" );
+CVAR_DEFINE_AUTO( r_entity_shadows_smooth, "0.25", FCVAR_ARCHIVE, "ease the shadow direction over this many seconds so it doesn't snap when the dominant light changes (0 = instant)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_flashlight, "1", FCVAR_ARCHIVE, "the flashlight beam cancels (overpowers) entity shadows where it shines" );
 CVAR_DEFINE_AUTO( r_entity_shadows_debug, "0", 0, "draw entity shadow footprints in bright yellow (and ignore strength)" );
 
@@ -75,6 +76,57 @@ static int		es_covtex_size;		// side length the pool was allocated at
 static byte	es_cov[ES_COV_MAX * ES_COV_MAX];
 static byte	es_tmp[ES_COV_MAX * ES_COV_MAX];
 static byte	es_rgba[ES_COV_MAX * ES_COV_MAX * 4];
+
+// per-entity smoothed shadow direction, keyed by cl_entity index. The raw direction
+// (R_EntityDynamicLight's dominant baked light) snaps when a caster crosses between two
+// lights; easing it across frames turns that snap into a quick glide and averages a
+// flickering midpoint to a stable in-between, so the shadow no longer pops.
+#define ES_SMOOTH_MAX	8192	// covers any sane entity index; out-of-range -> unsmoothed
+typedef struct
+{
+	vec3_t	dir;	// last smoothed direction (normalised)
+	double	time;	// when it was last updated (gp_cl->time)
+	qboolean valid;
+} es_dirsmooth_t;
+static es_dirsmooth_t	es_sdir[ES_SMOOTH_MAX];
+
+// ease `dir` (in: fresh normalised sample; out: smoothed) toward its cached value for this
+// entity. Reseeds (snaps) on first sight or after a gap, so an entity that just appeared or
+// teleported doesn't slew its shadow across the world.
+static void R_EntityShadowSmoothDir( int index, vec3_t dir )
+{
+	const float tau = r_entity_shadows_smooth.value;
+	es_dirsmooth_t *s;
+	double now = gp_cl->time;
+	float dt, alpha;
+
+	if( tau <= 0.0f || index < 0 || index >= ES_SMOOTH_MAX )
+		return;	// smoothing off, or index we can't cache -> use the raw sample
+
+	s = &es_sdir[index];
+
+	// first sight, time ran backwards (map/level reload), or not seen recently -> snap
+	if( !s->valid || now < s->time || ( now - s->time ) > 0.5 )
+	{
+		VectorCopy( dir, s->dir );
+		s->valid = true;
+		s->time = now;
+		return;
+	}
+
+	dt = (float)( now - s->time );
+	s->time = now;
+
+	alpha = 1.0f - (float)exp( -dt / tau );	// frame-rate-independent exponential approach
+	alpha = bound( 0.0f, alpha, 1.0f );
+
+	VectorLerp( s->dir, alpha, dir, s->dir );	// s->dir += alpha * (sample - s->dir)
+	if( VectorLength( s->dir ) < 0.001f )
+		VectorCopy( dir, s->dir );		// degenerate (opposed dirs) -> take the sample
+	VectorNormalize( s->dir );
+
+	VectorCopy( s->dir, dir );
+}
 
 /*
 =================
@@ -175,6 +227,7 @@ void R_InitEntityShadows( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_size );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_softness );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_floor );
+	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_smooth );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_flashlight );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_debug );
 }
@@ -323,6 +376,9 @@ static qboolean R_EntityShadowPrepare( es_caster_t *c, cl_entity_t *e, int cov, 
 	if( VectorLength( L ) < 0.001f )
 		VectorSet( L, 0.0f, 0.0f, -1.0f );
 	VectorNormalize( L );
+
+	// ease the direction across frames so it doesn't snap when the dominant light changes
+	R_EntityShadowSmoothDir( e->index, L );
 
 	R_EntityShadowSetupOrtho( e, L, spot, eye, up, &zfar, c->center, &c->influence );
 	Mat4_LookAt( view, eye, L, up );
