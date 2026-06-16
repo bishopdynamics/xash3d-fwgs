@@ -36,6 +36,7 @@ receiver pass lights world + brush surfaces only) - a TODO to revisit.
 
 #include "gl_local.h"
 #include "xash3d_mathlib.h"
+#include "pm_defs.h"	// PM_STUDIO_IGNORE etc. for the supporting-surface ground trace
 
 CVAR_DEFINE_AUTO( r_entity_shadows, "0", FCVAR_ARCHIVE, "dynamic shadows cast by entities (monsters/props/player) onto the world" );
 CVAR_DEFINE_AUTO( r_entity_shadows_max, "16", FCVAR_ARCHIVE, "max number of nearest entities that cast a shadow (performance cap)" );
@@ -43,6 +44,7 @@ CVAR_DEFINE_AUTO( r_entity_shadows_player, "1", FCVAR_ARCHIVE, "the player (and 
 CVAR_DEFINE_AUTO( r_entity_shadows_strength, "0.4", FCVAR_ARCHIVE, "how dark entity shadows are (0 = none .. 1 = black)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_size, "256", FCVAR_ARCHIVE, "entity shadow coverage-map resolution in texels (square); higher = finer footprint, more CPU" );
 CVAR_DEFINE_AUTO( r_entity_shadows_softness, "6", FCVAR_ARCHIVE, "soften the shadow edge: box-blur radius in coverage texels (0 = hard)" );
+CVAR_DEFINE_AUTO( r_entity_shadows_floor, "48", FCVAR_ARCHIVE, "lock the shadow to the ground plane the caster stands on; reject surfaces this many units off that plane, or facing differently (0 = no lock)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_flashlight, "1", FCVAR_ARCHIVE, "the flashlight beam cancels (overpowers) entity shadows where it shines" );
 CVAR_DEFINE_AUTO( r_entity_shadows_debug, "0", 0, "draw entity shadow footprints in bright yellow (and ignore strength)" );
 
@@ -58,6 +60,9 @@ typedef struct
 	float	texmat[16];	// bias * ortho * view : world -> coverage [0,1]^2 (+ depth in r)
 	vec3_t	center;		// receiver-cull sphere centre (world)
 	float	influence;	// receiver-cull sphere radius (world units)
+	vec3_t	cnorm;		// contact ground plane normal (world), from the solid down-trace
+	float	cdist;		// contact ground plane distance (DotProduct( p, cnorm ) == cdist on it)
+	qboolean hasGround;	// the down-trace found a usable ground plane -> plane-lock is active
 	vec3_t	ldir;		// light travel direction (receivers must face into it)
 } es_caster_t;
 
@@ -169,6 +174,7 @@ void R_InitEntityShadows( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_strength );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_size );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_softness );
+	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_floor );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_flashlight );
 	gEngfuncs.Cvar_RegisterVariable( &r_entity_shadows_debug );
 }
@@ -274,6 +280,44 @@ static qboolean R_EntityShadowPrepare( es_caster_t *c, cl_entity_t *e, int cov, 
 	VectorClear( lvec );
 	VectorCopy( e->origin, spot );
 	R_EntityDynamicLight( e, &al, true, gp_cl->time, spot, lvec );
+
+	// R_EntityDynamicLight's `spot` comes from a LIGHTMAP down-trace, which can
+	// punch through a thin platform and report the floor far below it. That floor
+	// then balloons the receiver cull sphere (influence = radius + drop + ...) until
+	// it swallows the lower floor, and the silhouette gets projected down onto it
+	// (the intro tram-ride bug: shadow lands on the floor under a raised platform).
+	// Find the REAL supporting surface with a SOLID collision trace - world + brush
+	// entities, studio models ignored - straight down from the feet, exactly like the
+	// AO contact-shadow floor finder (gl_ao.c). Use it both to size the cull sphere
+	// (spot) and to lock the shadow to that one ground plane (cnorm/cdist below), so a
+	// second surface layered under it can never receive a copy. Keep the lightmap spot
+	// only when nothing solid is below (e.g. over a pit).
+	c->hasGround = false;
+	{
+		vec3_t	src, end;
+		pmtrace_t tr;
+
+		// start at the model's vertical centre, not just above the feet: if the feet
+		// penetrate the surface (some monsters sink a few units into a ramp), a feet-high
+		// start sits INSIDE the brush and the trace returns startsolid - which would make
+		// us bail and lose both the cull-sphere sizing and the plane-lock for that one
+		// entity (its shadow then doubles and over-reaches). PM_STUDIO_IGNORE skips this
+		// model's own body, so starting mid-height is safe and clears minor penetration.
+		src[0] = e->origin[0];
+		src[1] = e->origin[1];
+		src[2] = e->origin[2] + 0.5f * ( e->model->mins[2] + e->model->maxs[2] );
+		VectorCopy( src, end );
+		end[2] -= 2048.0f;
+
+		tr = gEngfuncs.CL_TraceLine( src, end, PM_STUDIO_IGNORE );
+		if( !tr.startsolid && !tr.allsolid && tr.fraction < 1.0f && tr.plane.normal[2] > 0.5f )
+		{
+			spot[2] = tr.endpos[2];	// the surface the entity actually stands on
+			VectorCopy( tr.plane.normal, c->cnorm );
+			c->cdist = tr.plane.dist;
+			c->hasGround = true;
+		}
+	}
 
 	VectorCopy( dir, L );
 	if( VectorLength( L ) < 0.001f )
@@ -425,16 +469,34 @@ static void R_EntityShadowReceiverSurf( msurface_t *surf, const matrix4x4 obj )
 	}
 }
 
-// receiver accepted if its bounding sphere overlaps the cull sphere AND it FACES the
-// light. The facing test (not a per-face depth test) is what keeps the shadow off the
-// ceiling without skipping whole floor faces: a floor always faces an overhead light, so
-// every floor face receives - seamless across BSP splits (the old centre-depth gate
-// dropped faces whose centre fell on the light side, leaving shadow on only some tiles).
+// contact-plane lock: keep only surfaces that belong to the one ground plane the caster
+// actually stands on (and its coplanar continuation). A surface layered below it - the
+// floor under a ramp or a raised platform - has a different plane: tilted away from the
+// contact normal, or parallel but offset. Rejecting it stops the projected silhouette
+// from printing a duplicate shadow on that lower surface ("only the first ground plane").
+// snorm/sdist are the surface's WORLD-space, front-oriented plane.
+static qboolean R_EntityShadowOnContactPlane( const es_caster_t *c, const vec3_t snorm, float sdist )
+{
+	if( !c->hasGround || r_entity_shadows_floor.value <= 0.0f )
+		return true;	// no ground found this frame, or the lock is disabled
+	if( DotProduct( snorm, c->cnorm ) < 0.98f )
+		return false;	// not parallel to the ground plane (e.g. the floor under a ramp)
+	if( fabs( sdist - c->cdist ) > r_entity_shadows_floor.value )
+		return false;	// parallel but offset -> a separate layer (floor under a platform)
+	return true;
+}
+
+// receiver accepted if its bounding sphere overlaps the cull sphere, it FACES the light,
+// and it lies on the caster's contact ground plane. The facing test (not a per-face depth
+// test) is what keeps the shadow off the ceiling without skipping whole floor faces: a
+// floor always faces an overhead light, so every floor face receives - seamless across
+// BSP splits (the old centre-depth gate dropped faces whose centre fell on the light side,
+// leaving shadow on only some tiles).
 static qboolean R_EntityShadowSurfReceives( msurface_t *surf, const es_caster_t *c )
 {
 	mextrasurf_t *info = surf->info;
 	vec3_t center, ext, delta, n;
-	float sr;
+	float sr, sd;
 
 	VectorAverage( info->mins, info->maxs, center );
 	VectorSubtract( center, c->center, delta );
@@ -443,11 +505,20 @@ static qboolean R_EntityShadowSurfReceives( msurface_t *surf, const es_caster_t 
 	if( DotProduct( delta, delta ) > sr * sr )
 		return false;
 
+	// front-oriented plane of this surface (world space)
 	VectorCopy( surf->plane->normal, n );
+	sd = surf->plane->dist;
 	if( FBitSet( surf->flags, SURF_PLANEBACK ))
+	{
 		VectorNegate( n, n );
+		sd = -sd;
+	}
+
 	if( DotProduct( n, c->ldir ) >= -0.01f )
 		return false;	// faces away from / perpendicular to the light (e.g. the ceiling)
+
+	if( !R_EntityShadowOnContactPlane( c, n, sd ))
+		return false;	// a surface layered below the ground the caster stands on
 
 	return true;
 }
@@ -511,7 +582,28 @@ static void R_EntityShadowReceivers( const es_caster_t *c )
 
 				Matrix4x4_CreateFromEntity( obj, ent->angles, ent->origin, 1.0f );
 				for( s = 0; s < m->nummodelsurfaces; s++ )
-					R_EntityShadowReceiverSurf( &m->surfaces[m->firstmodelsurface + s], obj );
+				{
+					msurface_t *bsurf = &m->surfaces[m->firstmodelsurface + s];
+					vec3_t bn;
+					float bd;
+
+					// same contact-plane lock as the world surfaces. The brush plane is
+					// model-local; lift it to world space. Brush floors aren't rotated, so
+					// the normal is unchanged and the distance shifts by n . origin
+					// ( n.(p - origin) == dist_local  ->  n.p == dist_local + n.origin ).
+					VectorCopy( bsurf->plane->normal, bn );
+					bd = bsurf->plane->dist;
+					if( FBitSet( bsurf->flags, SURF_PLANEBACK ))
+					{
+						VectorNegate( bn, bn );
+						bd = -bd;
+					}
+					bd += DotProduct( bn, ent->origin );
+
+					if( !R_EntityShadowOnContactPlane( c, bn, bd ))
+						continue;
+					R_EntityShadowReceiverSurf( bsurf, obj );
+				}
 			}
 		}
 	}
