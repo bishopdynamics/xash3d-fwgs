@@ -13,10 +13,17 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 ----------------------------------------------------------------------------
-The Continuum menu draws each game's 800x600 menu background, normalized to a
-single image at gfx/shell/continuum/games/<gamedir>.png. Steam-era games ship
-it as a 4x3 grid of TGA tiles (resource/background/800_<row>_<col>_loading.tga);
-WON-era games ship a single gfx/shell/splash.bmp.
+The Continuum menu draws each game's menu background, normalized to a single image
+at gfx/shell/continuum/games/<gamedir>.png at its native aspect (the menu fits it:
+4:3 -> fit-width/top-pinned, wider -> fit-to-height/centered).
+
+Games ship the background as a grid of TGA tiles, resource/background/<set>_<row>_
+<col>_loading.tga, where <set> names an aspect/resolution (4:3 "800", widescreen
+"21_9", ...). We try the 4:3 "800" set first; modern Steam ships that one BLANK
+(opaque black) and puts the real art in a widescreen set, so if a composed set is
+near-black we move on to the next set until one has content. Edge tiles are partial,
+so the native size is just the summed tile dimensions. WON-era games instead ship a
+single gfx/shell/splash.bmp.
 
 This used to be an offline step (tools/compose_backgrounds.py); now the engine
 bakes it on first launch, behind the same run-once stage as world AO. We do it
@@ -43,9 +50,8 @@ PNG into continuum/. No blur: the menu aspect-fits the sharp art itself.
 #define BG_Mkdir( p )	mkdir(( p ), 0755 )
 #endif
 
-#define BG_W	800
-#define BG_H	600
-#define BG_TILE	256
+#define BG_MAXCOL	26	// tile columns a..z
+#define BG_MAXROW	16	// tile rows 1..16
 
 // load <relpath> forced to RGBA, or NULL, reading ONLY that game's own content (never the
 // always-mounted valve base - else a game with no tiles of its own would silently get
@@ -82,66 +88,130 @@ static rgbdata_t *BG_LoadTileRGBA( const char *gamedirAbs, const char *relpath )
 	return pic;
 }
 
-// Steam-era 4x3 tile grid -> one 800x600 RGBA image; NULL if any tile is missing
-static rgbdata_t *BG_ComposeTiles( const char *gamedirAbs )
+// essentially blank? Modern Steam ships the legacy 4:3 "800_" set as opaque black
+// (the real art is in a widescreen set), so a near-black compose means "try another".
+static qboolean BG_IsBlank( const rgbdata_t *img )
 {
-	rgbdata_t *tiles[3][4];
+	uint64_t sum = 0;
+	size_t   px = (size_t)img->width * img->height, i, n = 0;
+
+	for( i = 0; i < px; i += 97, n++ )	// sample is plenty to tell black from art
+	{
+		const byte *p = img->buffer + i * 4;
+		sum += p[0] + p[1] + p[2];
+	}
+	return n ? (( sum / ( n * 3 )) < 6 ) : true;	// mean luma < 6/255
+}
+
+// Compose one named tile set, resource/background/<prefix>_<row>_<col>_loading.tga
+// (rows 1.., cols a..), into one RGBA image at its NATIVE size. Edge tiles are
+// partial (e.g. 4:3 last col is 32px), so summing real tile dimensions yields the
+// exact image - no per-aspect constants. NULL if the set is absent or incomplete.
+static rgbdata_t *BG_ComposeSet( const char *gamedirAbs, const char *prefix )
+{
+	rgbdata_t *tiles[BG_MAXROW][BG_MAXCOL];
+	int        rows = 0, cols = 0, r, c, y;
+	int        colX[BG_MAXCOL + 1], rowY[BG_MAXROW + 1];
 	rgbdata_t *canvas;
-	int        row, col, r, c, y;
+	char       rel[80];
 
 	memset( tiles, 0, sizeof( tiles ));
 
-	for( row = 0; row < 3; row++ )
+	// discover the grid: probe column 'a' downward for rows, row 1 across for cols
+	for( r = 0; r < BG_MAXROW; r++ )
 	{
-		for( col = 0; col < 4; col++ )
+		Q_snprintf( rel, sizeof( rel ), "resource/background/%s_%i_a_loading.tga", prefix, r + 1 );
+		if( !( tiles[r][0] = BG_LoadTileRGBA( gamedirAbs, rel ))) break;
+		rows = r + 1;
+	}
+	if( !rows ) return NULL;
+	cols = 1;
+	for( c = 1; c < BG_MAXCOL; c++ )
+	{
+		Q_snprintf( rel, sizeof( rel ), "resource/background/%s_1_%c_loading.tga", prefix, 'a' + c );
+		if( !( tiles[0][c] = BG_LoadTileRGBA( gamedirAbs, rel ))) break;
+		cols = c + 1;
+	}
+
+	// fill the rest of the grid; any missing interior tile = incomplete set
+	for( r = 0; r < rows; r++ )
+	{
+		for( c = 0; c < cols; c++ )
 		{
-			char rel[64];
-
-			Q_snprintf( rel, sizeof( rel ), "resource/background/800_%i_%c_loading.tga", row + 1, "abcd"[col] );
-			tiles[row][col] = BG_LoadTileRGBA( gamedirAbs, rel );
-
-			if( !tiles[row][col] )
+			if( tiles[r][c] ) continue;
+			Q_snprintf( rel, sizeof( rel ), "resource/background/%s_%i_%c_loading.tga", prefix, r + 1, 'a' + c );
+			if( !( tiles[r][c] = BG_LoadTileRGBA( gamedirAbs, rel )))
 			{
-				for( r = 0; r <= row; r++ )
-					for( c = 0; c < 4; c++ )
-						if( tiles[r][c] ) FS_FreeImage( tiles[r][c] );
+				int rr, cc;
+				for( rr = 0; rr < rows; rr++ )
+					for( cc = 0; cc < cols; cc++ )
+						if( tiles[rr][cc] ) FS_FreeImage( tiles[rr][cc] );
 				return NULL;
 			}
 		}
 	}
 
+	// native canvas = summed real column widths x row heights
+	colX[0] = 0;
+	for( c = 0; c < cols; c++ ) colX[c + 1] = colX[c] + tiles[0][c]->width;
+	rowY[0] = 0;
+	for( r = 0; r < rows; r++ ) rowY[r + 1] = rowY[r] + tiles[r][0]->height;
+
 	canvas = Mem_Calloc( host.mempool, sizeof( *canvas ));
-	canvas->width  = BG_W;
-	canvas->height = BG_H;
+	canvas->width  = colX[cols];
+	canvas->height = rowY[rows];
 	canvas->type   = PF_RGBA_32;
-	canvas->size   = (size_t)BG_W * BG_H * 4;
+	canvas->size   = (size_t)canvas->width * canvas->height * 4;
 	canvas->buffer = Mem_Calloc( host.mempool, canvas->size );
 
-	for( row = 0; row < 3; row++ )
+	for( r = 0; r < rows; r++ )
 	{
-		for( col = 0; col < 4; col++ )
+		for( c = 0; c < cols; c++ )
 		{
-			rgbdata_t *t  = tiles[row][col];
-			const int  ox = col * BG_TILE;
-			const int  oy = row * BG_TILE;
-			int        cw = t->width;
-			int        ch = t->height;
+			rgbdata_t *t  = tiles[r][c];
+			const int  ox = colX[c], oy = rowY[r];
+			int        cw = t->width, ch = t->height;
 
-			if( ox + cw > BG_W ) cw = BG_W - ox;	// clip edge tiles to the canvas
-			if( oy + ch > BG_H ) ch = BG_H - oy;
+			if( ox + cw > canvas->width )  cw = canvas->width  - ox;
+			if( oy + ch > canvas->height ) ch = canvas->height - oy;
 
 			for( y = 0; y < ch; y++ )
 			{
-				memcpy( canvas->buffer + (( (size_t)( oy + y ) * BG_W + ox ) * 4 ),
+				memcpy( canvas->buffer + (( (size_t)( oy + y ) * canvas->width + ox ) * 4 ),
 					t->buffer + ( (size_t)y * t->width * 4 ),
 					(size_t)cw * 4 );
 			}
-
 			FS_FreeImage( t );
 		}
 	}
-
 	return canvas;
+}
+
+// Try the 4:3 "800_" set first; if it's blank (Steam blanks it) try the next set
+// until one has real art. Native aspect is preserved so the menu fits it (4:3 ->
+// fit-width, top-pinned; wider -> fit-to-height, centered). Caller frees via Mem_Free.
+static rgbdata_t *BG_ComposeBackground( const char *gamedirAbs )
+{
+	static const char *const prefixes[] =
+	{
+		"800", "1024", "1280", "1600",			// 4:3 sets (retail/WON have content here)
+		"16_9", "16_10", "21_9", "5_4", "2_1", "32_9"	// widescreen sets (modern Steam)
+	};
+	size_t i;
+
+	for( i = 0; i < sizeof( prefixes ) / sizeof( prefixes[0] ); i++ )
+	{
+		rgbdata_t *img = BG_ComposeSet( gamedirAbs, prefixes[i] );
+
+		if( !img )
+			continue;
+		if( !BG_IsBlank( img ))
+			return img;
+
+		Mem_Free( img->buffer );
+		Mem_Free( img );
+	}
+	return NULL;
 }
 
 // recursive mkdir of an absolute path (ignores already-exists)
@@ -208,6 +278,12 @@ void Host_AutoComposeBackground( void )
 		rgbdata_t  *img;
 		qboolean    fromTiles;
 
+		// a hand-authored override shipped in continuum/games_override/ replaces the
+		// composed art, so don't compose (the menu loads the override directly)
+		Q_snprintf( outpath, sizeof( outpath ), "gfx/shell/continuum/games_override/%s.png", game );
+		if( FS_FileExists( outpath, false ))
+			continue;
+
 		Q_snprintf( outpath, sizeof( outpath ), "gfx/shell/continuum/games/%s.png", game );
 		if( FS_FileExists( outpath, false ))
 			continue;	// already have it (continuum, valve, or that game)
@@ -217,10 +293,10 @@ void Host_AutoComposeBackground( void )
 		Q_snprintf( gamedir, sizeof( gamedir ), "%s/%s", rootdir, game );
 		const char *gdir = !Q_stricmp( game, GI->gamefolder ) ? NULL : gamedir;
 
-		img = BG_ComposeTiles( gdir );
+		img = BG_ComposeBackground( gdir );
 		fromTiles = ( img != NULL );
 		if( !img )
-			img = BG_LoadTileRGBA( gdir, "gfx/shell/splash.bmp" );	// WON-era
+			img = BG_LoadTileRGBA( gdir, "gfx/shell/splash.bmp" );	// WON-era single splash
 		if( !img )
 			continue;	// no menu background ships with this game
 
