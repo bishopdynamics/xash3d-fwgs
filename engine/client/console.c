@@ -119,7 +119,8 @@ typedef struct
 
 	// console scroll
 	int		backscroll;	// lines up from bottom to display
-	int 		linewidth;	// characters across screen
+	int 		linewidth;	// characters across screen (input field cap)
+	int 		linewidth_pixels;	// usable text width in pixels (print wrapping)
 
 	// console animation
 	float		showlines;	// how many lines we should display
@@ -475,6 +476,10 @@ static void Con_CheckResize( void )
 
 	int width = ( refState.width / charWidth ) - 2;
 	if( !ref.initialized ) width = (640 / 5);
+
+	// printed lines wrap on actual glyph width, not a worst-case 'O' cell,
+	// so proportional console fonts fill the screen instead of stopping short.
+	con.linewidth_pixels = ref.initialized ? ( refState.width - 2 * charWidth ) : ( 640 - 2 * 8 );
 
 	if( width == con.linewidth )
 		return;
@@ -883,6 +888,7 @@ void Con_Print( const char *txt )
 	static int  lastlength = 0;
 	static int  bufpos = 0;
 	static int  charpos = 0;
+	static int  pixelpos = 0;
 
 	qboolean norefresh = false;
 	int		c, mask = 0;
@@ -926,6 +932,7 @@ void Con_Print( const char *txt )
 				cr_pending = true;
 				bufpos = 0;
 				charpos = 0;
+				pixelpos = 0;
 			}
 			break;
 		case '\n':
@@ -933,6 +940,7 @@ void Con_Print( const char *txt )
 			lastlength = CON_LINES_LAST().length;
 			bufpos = 0;
 			charpos = 0;
+			pixelpos = 0;
 			break;
 		default:
 			buf[bufpos++] = c | mask;
@@ -949,16 +957,25 @@ void Con_Print( const char *txt )
 			}
 			else
 			{
-				// not a color string, move char counter
+				// not a color string, advance char + pixel cursors
 				charpos++;
+				if( con.curFont )
+					pixelpos += con.curFont->charWidths[(byte)c];
+				else
+					pixelpos += 8;
 			}
 
-			if(( bufpos >= sizeof( buf ) - 1 ) || charpos >= ( con.linewidth - 1 ))
+			// wrap on actual drawn width so proportional fonts fill the
+			// screen; fall back to the char count if no pixel width is known.
+			if(( bufpos >= sizeof( buf ) - 1 )
+				|| ( con.linewidth_pixels > 0 && pixelpos >= con.linewidth_pixels )
+				|| ( con.linewidth_pixels <= 0 && charpos >= ( con.linewidth - 1 )))
 			{
 				Con_AddLine( buf, bufpos, true );
 				lastlength = CON_LINES_LAST().length;
 				bufpos = 0;
 				charpos = 0;
+				pixelpos = 0;
 			}
 			break;
 		}
@@ -975,6 +992,7 @@ void Con_Print( const char *txt )
 			lastlength = 0;
 			bufpos = 0;
 			charpos = 0;
+			pixelpos = 0;
 		}
 
 		// FIXME: disable updating screen, because when texture is bound any console print
