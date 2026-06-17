@@ -478,11 +478,107 @@ static void R_AOBoxBlur( int radius )
 
 /*
 =================
+R_AOFloorAt
+
+is there a real floor at world (x,y) at ~floorz? A short down-trace (brush-entity
+aware, studio-ignoring - same rule as R_AOGroundTrace), true only for a roughly
+horizontal hit close to floorz. Used to crop the contact shadow to the floor it
+actually rests on, so a body in a tight wall recess doesn't paint the shadow up
+the side walls / out past the floor edge.
+=================
+*/
+static qboolean R_AOFloorAt( float x, float y, float floorz )
+{
+	vec3_t src, end;
+	pmtrace_t tr;
+	float dz;
+
+	VectorSet( src, x, y, floorz + 8.0f );
+	VectorSet( end, x, y, floorz - 8.0f );
+
+	tr = gEngfuncs.CL_TraceLine( src, end, PM_STUDIO_IGNORE );
+
+	if( tr.startsolid || tr.allsolid || tr.fraction >= 1.0f )
+		return false;	// no floor here (a gap / past the edge)
+	if( tr.plane.normal[2] < bound( 0.0f, r_ao_ground_dot.value, 1.0f ))
+		return false;	// a wall / steep face, not floor
+	dz = tr.endpos[2] - floorz;
+	if( dz < 0.0f ) dz = -dz;
+	return ( dz <= 4.0f );	// must be the same floor level, not a step above/below
+}
+
+/*
+=================
+R_AOStampFloorClip
+
+multiply the (blurred) coverage by a floor-presence mask so the contact shadow
+stops at the floor edge instead of spilling onto recess walls. Cheap path first:
+if the four footprint corners + centre all have floor it's an open floor - leave
+the shadow alone (5 traces). Only when an edge is found do we probe a coarse grid
+and crop, so normal floors pay almost nothing and never get clipped at BSP seams.
+=================
+*/
+#define AO_PROBE	16	// floor-probe grid resolution (full-grid path only)
+
+static void R_AOStampFloorClip( float minx, float miny, float maxx, float maxy, float floorz )
+{
+	static float mask[AO_PROBE * AO_PROBE];
+	float gx = maxx - minx, gy = maxy - miny;
+	int px, py, x, y;
+
+	if( gx <= 0.0f || gy <= 0.0f )
+		return;
+
+	// quick open-floor test: corners + centre. All floor -> nothing to crop.
+	if( R_AOFloorAt( minx, miny, floorz ) && R_AOFloorAt( maxx, miny, floorz )
+		&& R_AOFloorAt( minx, maxy, floorz ) && R_AOFloorAt( maxx, maxy, floorz )
+		&& R_AOFloorAt(( minx + maxx ) * 0.5f, ( miny + maxy ) * 0.5f, floorz ))
+		return;
+
+	// edge found: probe the grid (cell centres) for the floor-presence mask
+	for( py = 0; py < AO_PROBE; py++ )
+	{
+		for( px = 0; px < AO_PROBE; px++ )
+		{
+			float wx = minx + gx * (( px + 0.5f ) / AO_PROBE );
+			float wy = miny + gy * (( py + 0.5f ) / AO_PROBE );
+			mask[py * AO_PROBE + px] = R_AOFloorAt( wx, wy, floorz ) ? 1.0f : 0.0f;
+		}
+	}
+
+	// crop the coverage, bilinearly sampling the mask so the floor-edge cutoff is
+	// crisp (the shadow can't climb the wall) but not stair-stepped
+	for( y = 0; y < AO_STAMP; y++ )
+	{
+		for( x = 0; x < AO_STAMP; x++ )
+		{
+			float fx = (( x + 0.5f ) / AO_STAMP ) * AO_PROBE - 0.5f;
+			float fy = (( y + 0.5f ) / AO_STAMP ) * AO_PROBE - 0.5f;
+			int x0 = (int)floorf( fx ), y0 = (int)floorf( fy );
+			float tx = fx - x0, ty = fy - y0;
+			int x1 = x0 + 1, y1 = y0 + 1;
+			float m;
+
+			x0 = bound( 0, x0, AO_PROBE - 1 ); x1 = bound( 0, x1, AO_PROBE - 1 );
+			y0 = bound( 0, y0, AO_PROBE - 1 ); y1 = bound( 0, y1, AO_PROBE - 1 );
+
+			m = mask[y0 * AO_PROBE + x0] * ( 1.0f - tx ) * ( 1.0f - ty )
+			  + mask[y0 * AO_PROBE + x1] * tx * ( 1.0f - ty )
+			  + mask[y1 * AO_PROBE + x0] * ( 1.0f - tx ) * ty
+			  + mask[y1 * AO_PROBE + x1] * tx * ty;
+
+			ao_cov[y * AO_STAMP + x] = (byte)( ao_cov[y * AO_STAMP + x] * m );
+		}
+	}
+}
+
+/*
+=================
 R_AOStampProject
 
-blur the (caller-filled) coverage, upload it, and lay it on the floor over the
-world-space rectangle [minx,miny]..[maxx,maxy]. `alpha` is peak darkness; `blur`
-is the box-blur radius in texels.
+blur the (caller-filled) coverage, crop it to the floor it rests on, upload it,
+and lay it on the floor over the world-space rectangle [minx,miny]..[maxx,maxy].
+`alpha` is peak darkness; `blur` is the box-blur radius in texels.
 =================
 */
 void R_AOStampProject( float minx, float miny, float maxx, float maxy, float floorz, float alpha, int blur )
@@ -500,6 +596,7 @@ void R_AOStampProject( float minx, float miny, float maxx, float maxy, float flo
 	}
 
 	R_AOBoxBlur( blur );
+	R_AOStampFloorClip( minx, miny, maxx, maxy, floorz );	// crop to the floor it rests on
 
 	for( i = 0; i < AO_STAMP * AO_STAMP; i++ )
 	{
