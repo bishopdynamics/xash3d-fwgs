@@ -717,7 +717,7 @@ transformed by it (brush entity). `*alpha_on` carries the masked GL state across
 calls so it toggles only when it actually changes (surfaces aren't sorted).
 =================
 */
-static void R_FlashlightDepthSurf( msurface_t *surf, const matrix4x4 obj, qboolean *alpha_on )
+static void R_FlashlightDepthSurf( msurface_t *surf, const matrix4x4 obj, const vec3_t light_origin, qboolean *alpha_on )
 {
 	glpoly2_t *p = surf->polys;
 	qboolean masked;
@@ -729,6 +729,33 @@ static void R_FlashlightDepthSurf( msurface_t *surf, const matrix4x4 obj, qboole
 
 	// binary mask only (the user explicitly wants cut-out, not partial opacity)
 	masked = FBitSet( surf->flags, SURF_TRANSPARENT ) ? true : false;
+
+	// A thin masked brush (ladder/grate/handrail) is double-sided: its near and far
+	// {-textured faces are ~coplanar, and with culling off (see the GL_Cull(0) note)
+	// BOTH write depth. When the far face's UV is shifted from the near one - e.g.
+	// valve c1a0e's test-chamber {ladder2, whose two faces' U offsets differ by 22
+	// texels - the far face's opaque rail columns land in the gaps the near face left
+	// transparent, stamping a phantom shadow bar down the middle of the cut-out. Only
+	// the face the light hits first should occlude, so drop masked faces that point
+	// away from the light. Solid world brushes are untouched (single-sided; the
+	// no-cull + LEQUAL nearest-surface rule still governs them).
+	if( masked )
+	{
+		float facing;
+
+		if( obj )
+		{
+			vec3_t local;
+			Matrix4x4_VectorITransform( obj, light_origin, local );
+			facing = PlaneDiff( local, surf->plane );
+		}
+		else facing = PlaneDiff( light_origin, surf->plane );
+
+		if( FBitSet( surf->flags, SURF_PLANEBACK ))
+			facing = -facing;
+		if( facing <= 0.0f )
+			return;	// back side of the cut-out, facing away from the light
+	}
 
 	if( masked != *alpha_on )
 	{
@@ -785,7 +812,7 @@ shadows from their CURRENT position; masked faces (ladder/handrail brush
 entities) cast their cut-out shape via R_FlashlightDepthSurf.
 =================
 */
-static void R_FlashlightBrushDepth( cl_entity_t *e, qboolean *alpha_on )
+static void R_FlashlightBrushDepth( cl_entity_t *e, const vec3_t light_origin, qboolean *alpha_on )
 {
 	model_t *m = e->model;
 	matrix4x4 obj;
@@ -794,7 +821,7 @@ static void R_FlashlightBrushDepth( cl_entity_t *e, qboolean *alpha_on )
 	Matrix4x4_CreateFromEntity( obj, e->angles, e->origin, 1.0f );
 
 	for( i = 0; i < m->nummodelsurfaces; i++ )
-		R_FlashlightDepthSurf( &m->surfaces[m->firstmodelsurface + i], obj, alpha_on );
+		R_FlashlightDepthSurf( &m->surfaces[m->firstmodelsurface + i], obj, light_origin, alpha_on );
 }
 
 /*
@@ -984,7 +1011,7 @@ void R_FlashlightShadowPass( void )
 		if( !R_FlashlightSurfaceVisible( surf, f.origin, f.fwd, f.range ))
 			continue;
 
-		R_FlashlightDepthSurf( surf, NULL, &alpha_masked );
+		R_FlashlightDepthSurf( surf, NULL, f.origin, &alpha_masked );
 	}
 
 	// brush entities (doors, platforms, func_walls) cast from their CURRENT
@@ -1016,7 +1043,7 @@ void R_FlashlightShadowPass( void )
 					continue;
 				if( !R_FlashlightBrushVisible( ent, &f ))
 					continue;
-				R_FlashlightBrushDepth( ent, &alpha_masked );
+				R_FlashlightBrushDepth( ent, f.origin, &alpha_masked );
 			}
 		}
 	}
