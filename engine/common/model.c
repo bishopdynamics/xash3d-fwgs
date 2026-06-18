@@ -33,7 +33,9 @@ CVAR_DEFINE_AUTO( r_wadtextures, "0", FCVAR_LATCH, "completely ignore textures i
 CVAR_DEFINE_AUTO( r_showhull, "0", 0, "draw collision hulls 1-3" );
 CVAR_DEFINE_AUTO( r_allow_wad3_luma, "0", FCVAR_LATCH|FCVAR_ARCHIVE, "allow usage of luma textures in wad3 (tilde textures)" );
 static CVAR_DEFINE_AUTO( mod_world_residency, "1", 0, "keep parsed world models resident across changelevels for instant revisits" );
+static qboolean mod_force_fresh_world;	// one-shot: next Mod_LoadWorld bypasses the residency cache
 static void Mod_FreeCachedWorlds( void );
+static void Mod_DropCachedWorld( const char *name );
 static void Mod_PreloadWorld_f( void );
 
 /*
@@ -601,6 +603,56 @@ static qboolean Mod_RestoreCachedWorld( const char *name )
 
 /*
 ==================
+Mod_FreeWorldCacheEntry
+
+free one residency entry's pool + host.mempool strings + submodel snapshots. If
+slot #0 currently borrows this entry's pool, its slots are cleared here so the
+caller's Mod_FreeModel does not double-free. Does NOT unlink wc from wc_list -
+the caller owns the list bookkeeping.
+==================
+*/
+static void Mod_FreeWorldCacheEntry( worldcache_t *wc )
+{
+	if( mod_known->mempool == wc->world.mempool && mod_known->name[0] )
+	{
+		// active world borrows this pool: clear its slots, we own the free
+		for( int i = 1; i < mod_numknown; i++ )
+		{
+			if( mod_known[i].name[0] == '*' )
+				memset( &mod_known[i], 0, sizeof( model_t ));
+		}
+		memset( mod_known, 0, sizeof( model_t ));
+		world.version = 0;
+		world.shadowdata = NULL;
+		world.deluxedata = NULL;
+		world.hull_models = NULL;
+		world.compressed_phs = NULL;
+		world.phsofs = NULL;
+
+		// the active world aliases this entry's host.mempool strings
+		// (restored from it); null the live copies before we free them
+		// below so we never double-free or leave a dangling world.message.
+		world.message = NULL;
+		world.compiler = NULL;
+		world.generator = NULL;
+		world.wadlist = NULL;
+		world.wadcount = 0;
+	}
+
+	// release the host.mempool strings this cache entry owns
+	Mem_Free( wc->worldstate.message );
+	Mem_Free( wc->worldstate.compiler );
+	Mem_Free( wc->worldstate.generator );
+	Mem_Free( wc->worldstate.wadlist );
+
+	Mem_FreePool( &wc->world.mempool );
+	if( wc->submodels )
+		Mem_Free( wc->submodels );
+	Mem_Free( wc );
+}
+
+/*
+==================
 Mod_FreeCachedWorlds
 
 full purge (server shutdown, vid restart). frees the cached pools; if slot #0
@@ -615,45 +667,37 @@ static void Mod_FreeCachedWorlds( void )
 	for( wc = wc_list; wc != NULL; wc = next )
 	{
 		next = wc->next;
-
-		if( mod_known->mempool == wc->world.mempool && mod_known->name[0] )
-		{
-			// active world borrows this pool: clear its slots, we own the free
-			for( int i = 1; i < mod_numknown; i++ )
-			{
-				if( mod_known[i].name[0] == '*' )
-					memset( &mod_known[i], 0, sizeof( model_t ));
-			}
-			memset( mod_known, 0, sizeof( model_t ));
-			world.version = 0;
-			world.shadowdata = NULL;
-			world.deluxedata = NULL;
-			world.hull_models = NULL;
-			world.compressed_phs = NULL;
-			world.phsofs = NULL;
-
-			// the active world aliases this entry's host.mempool strings
-			// (restored from it); null the live copies before we free them
-			// below so we never double-free or leave a dangling world.message.
-			world.message = NULL;
-			world.compiler = NULL;
-			world.generator = NULL;
-			world.wadlist = NULL;
-			world.wadcount = 0;
-		}
-
-		// release the host.mempool strings this cache entry owns
-		Mem_Free( wc->worldstate.message );
-		Mem_Free( wc->worldstate.compiler );
-		Mem_Free( wc->worldstate.generator );
-		Mem_Free( wc->worldstate.wadlist );
-
-		Mem_FreePool( &wc->world.mempool );
-		if( wc->submodels )
-			Mem_Free( wc->submodels );
-		Mem_Free( wc );
+		Mod_FreeWorldCacheEntry( wc );
 	}
 	wc_list = NULL;
+}
+
+/*
+==================
+Mod_DropCachedWorld
+
+drop a single map's residency entry (freeing its pool) so the next Mod_LoadWorld
+of it takes the full parse + render-build path instead of restoring it. A world
+that was only warmed by world_preload has never been through a connect-time
+render build (R_NewMap/GL_BuildLightmaps), so restoring it renders moving-brush
+submodels (e.g. the c1a0 tram) with missing faces; cold session entry (load
+savegame / demo start) forces a fresh load to sidestep that. The freshly loaded
+world re-enters the cache good, so in-game changelevels keep the fast path.
+==================
+*/
+static void Mod_DropCachedWorld( const char *name )
+{
+	worldcache_t	*wc, **prev;
+
+	for( prev = &wc_list; ( wc = *prev ) != NULL; prev = &wc->next )
+	{
+		if( Q_stricmp( wc->name, name ))
+			continue;
+
+		*prev = wc->next;	// unlink before freeing
+		Mod_FreeWorldCacheEntry( wc );
+		return;
+	}
 }
 
 /*
@@ -755,12 +799,22 @@ Loads in the map and all submodels
 */
 model_t *Mod_LoadWorld( const char *name, qboolean preload )
 {
+	qboolean force_fresh = mod_force_fresh_world;
+
+	mod_force_fresh_world = false;	// one-shot
+
 	// already loaded?
 	if( !Q_stricmp( mod_known->name, name ))
 		return mod_known;
 
 	// free sequence files on studiomodels (and cache the current world)
 	Mod_PurgeStudioCache();
+
+	// cold session entry (load savegame / demo start) forces a fresh load: a
+	// world only warmed by world_preload has never had its render data built, so
+	// restoring it loses moving-brush faces. Drop the stale entry first.
+	if( force_fresh )
+		Mod_DropCachedWorld( name );
 
 	// revisited map: restore from the residency cache, skipping the load
 	if( mod_world_residency.value && Mod_RestoreCachedWorld( name ))
@@ -775,6 +829,21 @@ model_t *Mod_LoadWorld( const char *name, qboolean preload )
 	ASSERT( pworld == mod_known );
 
 	return pworld;
+}
+
+/*
+==================
+Mod_ForceFreshWorld
+
+ask the next Mod_LoadWorld to bypass the residency cache and load the world
+fresh (parse + connect-time render build). Called on cold session entry - load
+savegame and demo playback start - where a preload-only world would otherwise
+restore without ever having been render-built. One-shot; cleared on use.
+==================
+*/
+void Mod_ForceFreshWorld( void )
+{
+	mod_force_fresh_world = true;
 }
 
 /*

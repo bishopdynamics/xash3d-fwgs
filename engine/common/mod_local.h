@@ -149,6 +149,7 @@ void Mod_FreeAll( void );
 void Mod_Shutdown( void );
 void Mod_ClearUserData( void );
 model_t *Mod_LoadWorld( const char *name, qboolean preload );
+void Mod_ForceFreshWorld( void );
 void *Mod_Calloc( int number, size_t size );
 void *Mod_CacheCheck( struct cache_user_s *c );
 void Mod_LoadCacheFile( const char *path, struct cache_user_s *cu );

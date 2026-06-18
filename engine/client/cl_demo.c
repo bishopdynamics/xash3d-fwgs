@@ -732,6 +732,10 @@ static void CL_DemoStartPlayback( int mode )
  	cls.nextcmdtime = host.realtime;
 	cl.last_command_ack = -1;
 
+	// cold demo start: load the world fresh rather than restoring a preload-only
+	// residency copy that was never render-built (loses moving-brush faces)
+	Mod_ForceFreshWorld();
+
 	Con_Printf( "Demo playback started\n" ); // marker for external capture tooling
 }
 

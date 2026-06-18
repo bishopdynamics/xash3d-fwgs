@@ -2427,6 +2427,13 @@ qboolean SV_LoadGame( const char *pPath )
 	Cvar_FullSet( "maxplayers", "1", FCVAR_LATCH );
 	Cvar_SetValue( "deathmatch", 0 );
 	Cvar_SetValue( "coop", 0 );
+
+	// user-initiated load: load the entered map's world fresh rather than
+	// restoring a preload-only residency copy that was never render-built
+	// (loses moving-brush faces, e.g. the c1a0 tram). In-game changelevels keep
+	// the fast residency path - this only fires on the menu "load" entry.
+	Mod_ForceFreshWorld();
+
 	COM_LoadGame( gameHeader.mapName );
 
 	return true;
