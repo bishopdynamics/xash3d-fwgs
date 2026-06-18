@@ -1322,15 +1322,22 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		// xash3d-streaming: warm the residency cache for the whole campaign.
 		// Runs after the configs above have decided host_level_streaming.
 		// The engine derives the preload order from the game's own maps
-		// (host_streampreload.c); a hand-written streampreload.cfg in the
-		// game dir (gamedironly: never inherited from valve/) overrides it
+		// (host_streampreload.c) and loads them synchronously behind the
+		// startup progress screen, so the cache is fully warm (and no
+		// world_preload is left pending to race a demo/game start) before the
+		// menu appears; a hand-written streampreload.cfg in the game dir
+		// (gamedironly: never inherited from valve/) overrides the derived list.
 		if( host_level_streaming.value )
 		{
 			if( FS_FileExists( "streampreload.cfg", true ))
+			{
 				Cbuf_AddText( "exec streampreload.cfg\n" );
+				Cbuf_Execute();
+			}
 			else
-				Host_QueueStreamPreload();
-			Cbuf_Execute();
+			{
+				Host_StreamPreload();
+			}
 		}
 
 		// exec all files from userconfig.d

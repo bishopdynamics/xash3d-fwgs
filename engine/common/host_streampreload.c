@@ -27,6 +27,7 @@ dir still overrides all of this (see Host_Exec handling in host.c).
 
 #include "common.h"
 #include "bspfile.h"
+#include "mod_local.h"	// Mod_LoadWorld - warm the residency cache synchronously
 
 #define SG_MAX_MAPS    1024
 #define SG_MAX_EDGES   4096
@@ -47,6 +48,8 @@ static sg_node_t *sg_nodes;
 static int       sg_numnodes;
 static sg_edge_t *sg_edges;
 static int       sg_numedges;
+static short     sg_order[SG_MAX_MAPS];	// preload order (node indices), filled by the walk
+static int       sg_numorder;
 
 static int SG_FindNode( const char *name )
 {
@@ -199,8 +202,8 @@ static void SG_ParseChangelevels( int self, char *text )
 ================
 SG_WalkComponent
 
-breadth-first from a root, queueing one world_preload per frame (the wait
-keeps the menu responsive, exactly like the generated cfg used to)
+breadth-first from a root, recording the preload order into sg_order (the
+caller then loads them synchronously behind the startup progress screen)
 ================
 */
 static int SG_WalkComponent( int root )
@@ -220,7 +223,8 @@ static int SG_WalkComponent( int root )
 		const int n = queue[head++];
 		int i;
 
-		Cbuf_AddTextf( "world_preload %s\nwait\n", sg_nodes[n].name );
+		if( sg_numorder < SG_MAX_MAPS )
+			sg_order[sg_numorder++] = n;
 		count++;
 
 		// nodes are name-sorted and edges discovered in node order, so the
@@ -259,17 +263,26 @@ static qboolean SG_NodeConnected( int n )
 
 /*
 ================
-Host_QueueStreamPreload
+Host_StreamPreload
 
-scan this game's maps, build the changelevel graph and queue the preloads.
-Called at startup instead of exec'ing a generated streampreload.cfg
+scan this game's maps, build the changelevel graph, then load the whole campaign
+into the residency cache synchronously behind the startup progress screen. Runs
+at startup instead of exec'ing a generated streampreload.cfg. Loading here -
+rather than draining world_preload commands over the menu's frames - guarantees
+the cache is fully warm before the menu is interactive, so a demo or game started
+right away can never race a pending world_preload that would swap world slot #0.
 ================
 */
-void Host_QueueStreamPreload( void )
+void Host_StreamPreload( void )
 {
 	double   t = Sys_DoubleTime();
 	search_t *search;
 	int      i, queued = 0, chains = 0;
+
+	sg_numorder = 0;
+
+	if( SV_Active( ))
+		return;	// never preload while a map is live (would displace world slot 0)
 
 	search = FS_Search( "maps/*.bsp", true, true );
 	if( !search )
@@ -332,12 +345,7 @@ void Host_QueueStreamPreload( void )
 		}
 	}
 
-	// count what we queued (visited == queued)
-	for( i = 0; i < sg_numnodes; i++ )
-	{
-		if( sg_nodes[i].visited )
-			queued++;
-	}
+	queued = sg_numorder;	// every walked node was recorded in order
 
 	if( queued )
 	{
@@ -345,15 +353,41 @@ void Host_QueueStreamPreload( void )
 			queued, sg_numnodes, chains, sg_numedges, ( Sys_DoubleTime() - t ) * 1000.0 );
 	}
 
-	// run streampreload_done.cfg (if present) once the queued world_preloads
-	// have all drained — a hook for tooling that needs the whole campaign warm
-	// first (sibling to maps/<map>_load.cfg). Absent/harmless in normal play.
-	if( FS_FileExists( "streampreload_done.cfg", false ))
-		Cbuf_AddText( "exec streampreload_done.cfg\n" );
-
-	Mem_Free( sg_nodes );
+	// the FS search + edge list are done with; only the node names are still
+	// needed (for the load loop below)
 	Mem_Free( sg_edges );
 	Mem_Free( search );
-	sg_nodes = NULL;
 	sg_edges = NULL;
+
+	// load the whole campaign into the residency cache now, synchronously, behind
+	// the startup progress screen. Each Mod_LoadWorld parks the previous world in
+	// the cache (mod_world_residency); an already-resident map (e.g. one the AO
+	// bake just loaded) restores instantly. Doing it here instead of draining
+	// world_preload over the menu's frames means the cache is fully warm before
+	// the menu appears.
+	for( i = 0; i < sg_numorder; i++ )
+	{
+		char name[MAX_QPATH];
+		const char *base = sg_nodes[sg_order[i]].name;
+
+		Host_DrawStartupProgress( "Loading maps", i, sg_numorder, base );
+
+		Q_snprintf( name, sizeof( name ), "maps/%s.bsp", base );
+		if( FS_FileExists( name, false ))
+			Mod_LoadWorld( name, true );
+	}
+	if( sg_numorder )
+		Host_DrawStartupProgress( "Loading maps", sg_numorder, sg_numorder, "" );	// final 100% frame
+
+	Mem_Free( sg_nodes );
+	sg_nodes = NULL;
+
+	// run streampreload_done.cfg (if present) now the whole campaign is warm — a
+	// hook for tooling that needs everything resident first (sibling to
+	// maps/<map>_load.cfg). Absent/harmless in normal play.
+	if( FS_FileExists( "streampreload_done.cfg", false ))
+	{
+		Cbuf_AddText( "exec streampreload_done.cfg\n" );
+		Cbuf_Execute();
+	}
 }

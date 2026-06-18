@@ -373,18 +373,19 @@ static int AO_BakeWorld( model_t *world, const char *base )
 	return nbaked;
 }
 
+#if !XASH_DEDICATED
 /*
 =================
-AO_DrawProgress
+Host_DrawStartupProgress
 
-draw the one-time bake progress screen: a centred bar with "Processing <map>..."
-below it. We present our own frame (no menu/HUD yet) and pump window events so
-the window stays responsive through the blocking bake. No-op on a dedicated
-server (no renderer).
+shared blocking-startup progress screen: a centred bar with <title> above it and
+"<item>..." below. Used by the one-time AO bake and by the campaign map preload,
+both of which load maps behind it before the menu appears. We present our own
+frame (no menu/HUD yet) and pump window events so the WM doesn't flag the window
+unresponsive. No-op on a dedicated server (no renderer).
 =================
 */
-#if !XASH_DEDICATED
-static void AO_DrawProgress( int done, int total, const char *map )
+void Host_DrawStartupProgress( const char *title, int done, int total, const char *item )
 {
 	const rgba_t ink = { 232, 232, 236, 255 };
 	char  msg[96];
@@ -407,7 +408,7 @@ static void AO_DrawProgress( int done, int total, const char *map )
 
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, 0, 0, w, h, 12, 13, 16, 255 );	// backdrop
 
-	Q_strncpy( msg, "Preparing ambient occlusion", sizeof( msg ));
+	Q_strncpy( msg, title, sizeof( msg ));
 	Con_DrawStringLen( msg, &tw, &th );
 	Con_DrawString(( w - tw ) / 2, by - barh - th * 3, msg, ink );
 
@@ -415,9 +416,9 @@ static void AO_DrawProgress( int done, int total, const char *map )
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, bx, by, barw, barh, 24, 26, 32, 255 );			// track
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, bx, by, fillw, barh, 255, 163, 26, 255 );			// fill (continuum amber)
 
-	if( map[0] )
+	if( item[0] )
 	{
-		Q_snprintf( msg, sizeof( msg ), "Processing %s...", map );
+		Q_snprintf( msg, sizeof( msg ), "Processing %s...", item );
 		Con_DrawStringLen( msg, &tw, &th );
 		Con_DrawString(( w - tw ) / 2, by + barh + th, msg, ink );
 	}
@@ -426,7 +427,7 @@ static void AO_DrawProgress( int done, int total, const char *map )
 	Platform_RunEvents();	// service the window so the WM doesn't flag it unresponsive
 }
 #else
-static void AO_DrawProgress( int done, int total, const char *map ) { }
+void Host_DrawStartupProgress( const char *title, int done, int total, const char *item ) { }
 #endif
 
 /*
@@ -485,7 +486,7 @@ static void Host_BakeAO( qboolean force )
 			char     name[MAX_QPATH];
 			model_t *world;
 
-			AO_DrawProgress( i, ntodo, todo[i] );	// draw before this map's (blocking) bake
+			Host_DrawStartupProgress( "Preparing ambient occlusion", i, ntodo, todo[i] );	// draw before this map's (blocking) bake
 
 			Q_snprintf( name, sizeof( name ), "maps/%s.bsp", todo[i] );
 			if( !FS_FileExists( name, false ))
@@ -498,7 +499,7 @@ static void Host_BakeAO( qboolean force )
 				AO_BakeWorld( world, todo[i] );
 		}
 
-		AO_DrawProgress( ntodo, ntodo, "" );	// final 100% frame
+		Host_DrawStartupProgress( "Preparing ambient occlusion", ntodo, ntodo, "" );	// final 100% frame
 	}
 
 	Mem_Free( todo );
