@@ -445,9 +445,22 @@ void FS_Rescan( uint32_t flags, const char *language )
 		FS_MountArchive_Fullpath( str, FS_NOWRITE_PATH | FS_CUSTOM_PATH );
 
 	// Continuum's own always-mounted content dir: the shared menu assets (fonts,
-	// glyphs, brand mark, pill/dot) and the composed per-game backgrounds live here,
-	// so they resolve from every game without being mixed into valve. Added first =
-	// lowest priority (never shadows game content); read-only (never the write path).
+	// glyphs, brand mark, pill/dot), the composed per-game backgrounds and the
+	// default gamepad bindings live here, so they resolve from every game without
+	// being mixed into valve. Added first = lowest priority (never shadows game
+	// content); read-only (never the write path).
+	// Mount it from the rodir too (when set): under a read-only install layout
+	// like the flatpak, continuum/ lives in the rodir, NOT in the writable rootdir
+	// that the bare relative path below resolves against — without this the whole
+	// overlay (menu assets, backgrounds, gamepad.cfg) silently goes missing.
+	if( !COM_StringEmpty( fs_rodir ))
+	{
+		char rodir_continuum[MAX_VA_STRING];
+		Q_snprintf( rodir_continuum, sizeof( rodir_continuum ), "%s/continuum/", fs_rodir );
+		FS_AllowDirectPaths( true );
+		FS_AddGameDirectory( rodir_continuum, FS_NOWRITE_PATH | FS_CUSTOM_PATH );
+		FS_AllowDirectPaths( false );
+	}
 	FS_AddGameDirectory( "continuum/", FS_NOWRITE_PATH | FS_CUSTOM_PATH );
 
 	if( Q_stricmp( GI->basedir, GI->gamefolder ))
@@ -502,7 +515,9 @@ void FS_LoadGameInfo( uint32_t flags, const char *language )
 	}
 
 	if( i == FI.numgames )
-		Sys_Error( "Couldn't find game directory '%s'\n", fs_gamedir );
+		Sys_Error( "Couldn't find game data for '%s'.\n\n"
+			"Please place the game data files (valve, bshift, gearbox) in:\n%s\n",
+			fs_gamedir, fs_rootdir );
 
 	FI.GameInfo = FI.games[i];
 
