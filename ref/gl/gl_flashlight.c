@@ -33,7 +33,7 @@ See docs/flashlight-design.md.
 #include "gl_local.h"
 #include "xash3d_mathlib.h"
 
-CVAR_DEFINE_AUTO( r_flashlight_projected, "0", FCVAR_ARCHIVE, "use the improved projected-texture flashlight" );
+CVAR_DEFINE_AUTO( r_flashlight_projected, "1", FCVAR_ARCHIVE, "use the improved projected-texture flashlight" );
 CVAR_DEFINE_AUTO( r_flashlight_cone, "35", FCVAR_ARCHIVE, "beam (hotspot) cone angle in degrees" );
 CVAR_DEFINE_AUTO( r_flashlight_intensity, "3.0", FCVAR_ARCHIVE, "beam (hotspot) brightness; >1 draws extra additive passes (uncapped)" );
 CVAR_DEFINE_AUTO( r_flashlight_spill_cone, "90", FCVAR_ARCHIVE, "spill (field) cone angle in degrees - the wider, dimmer halo around the beam" );

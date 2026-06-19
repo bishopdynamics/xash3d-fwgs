@@ -38,7 +38,7 @@ receiver pass lights world + brush surfaces only) - a TODO to revisit.
 #include "xash3d_mathlib.h"
 #include "pm_defs.h"	// PM_STUDIO_IGNORE etc. for the supporting-surface ground trace
 
-CVAR_DEFINE_AUTO( r_entity_shadows, "0", FCVAR_ARCHIVE, "dynamic shadows cast by entities (monsters/props/player) onto the world" );
+CVAR_DEFINE_AUTO( r_entity_shadows, "1", FCVAR_ARCHIVE, "dynamic shadows cast by entities (monsters/props/player) onto the world" );
 CVAR_DEFINE_AUTO( r_entity_shadows_max, "16", FCVAR_ARCHIVE, "max number of nearest entities that cast a shadow (performance cap)" );
 CVAR_DEFINE_AUTO( r_entity_shadows_player, "1", FCVAR_ARCHIVE, "the player (and other players) cast entity shadows" );
 CVAR_DEFINE_AUTO( r_entity_shadows_strength, "0.4", FCVAR_ARCHIVE, "how dark entity shadows are (0 = none .. 1 = black)" );

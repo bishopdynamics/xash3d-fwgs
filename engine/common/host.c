@@ -1296,17 +1296,40 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		// Continuum unified config: shared cvars/bindings for all games live
 		// in the base game dir (valve/unified.cfg, reachable through the
 		// search path from every game) and override the per-game config;
-		// localconfig.cfg is the optional per-game escape hatch on top
-		if( FS_FileExists( "unified.cfg", false ))
+		// localconfig.cfg is the optional per-game escape hatch on top.
+		// No unified.cfg yet == a fresh install: we seed our controller
+		// defaults below once it has run (or been skipped). Scoped in a block
+		// so the local doesn't trip the switch's -Wjump-misses-init.
 		{
-			Cbuf_AddText( "exec unified.cfg\n" );
-			Cbuf_Execute();
-		}
+			qboolean fresh_install = !FS_FileExists( "unified.cfg", false );
 
-		if( FS_FileExists( "localconfig.cfg", false ))
-		{
-			Cbuf_AddText( "exec localconfig.cfg\n" );
-			Cbuf_Execute();
+			if( !fresh_install )
+			{
+				Cbuf_AddText( "exec unified.cfg\n" );
+				Cbuf_Execute();
+			}
+
+			if( FS_FileExists( "localconfig.cfg", false ))
+			{
+				Cbuf_AddText( "exec localconfig.cfg\n" );
+				Cbuf_Execute();
+			}
+
+			// On a fresh install the games' config chain leaves the gamepad
+			// unbound: their config.cfg's `unbindall` wipes the engine's
+			// built-in pad defaults and the original games never re-added
+			// controller binds. Seed Continuum's controller mapping from the
+			// always-mounted overlay (continuum/gamepad.cfg) so a controller
+			// works out of the box. It runs after the whole config chain, so
+			// it overrides any pad binds a game folder shipped; it is then
+			// written into unified.cfg on exit and is user-editable from
+			// Settings > Bindings from then on (this only runs while
+			// unified.cfg is absent, so it never fights those edits).
+			if( fresh_install && FS_FileExists( "gamepad.cfg", false ))
+			{
+				Cbuf_AddText( "exec gamepad.cfg\n" );
+				Cbuf_Execute();
+			}
 		}
 
 		// xash3d-streaming: bake any missing world-AO caches for the campaign
