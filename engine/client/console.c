@@ -24,7 +24,7 @@ GNU General Public License for more details.
 #include "utflib.h"
 
 static CVAR_DEFINE_AUTO( scr_conspeed, "600", FCVAR_ARCHIVE, "console moving speed" );
-static CVAR_DEFINE_AUTO( con_notifytime, "3", FCVAR_ARCHIVE, "notify time to live" );
+static CVAR_DEFINE_AUTO( con_notifytime, "0", FCVAR_ARCHIVE, "notify time to live" ); // Continuum: default off (menu "Debugging messages" off by default)
 CVAR_DEFINE_AUTO( con_fontsize, "1", FCVAR_ARCHIVE, "console font number (0, 1 or 2)" );
 static CVAR_DEFINE_AUTO( con_fontrender, "2", FCVAR_ARCHIVE, "console font render mode (0: additive, 1: holes, 2: trans)" );
 static CVAR_DEFINE_AUTO( con_ttffont, "1", FCVAR_ARCHIVE | FCVAR_FILTERABLE, "render the console with gfx/fonts/console.ttf instead of the classic bitmap fonts" );
@@ -33,7 +33,7 @@ static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font cha
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
 static CVAR_DEFINE_AUTO( con_color, "240 180 24", FCVAR_ARCHIVE, "set a custom console color" );
-static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
+static CVAR_DEFINE_AUTO( scr_drawversion, "0", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" ); // Continuum: default off (menu "Debugging messages" off by default)
 static CVAR_DEFINE_AUTO( scr_drawmapname, "0", FCVAR_ARCHIVE, "draw current map name in the bottom right corner while in game" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );

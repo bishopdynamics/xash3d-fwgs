@@ -1201,6 +1201,13 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cvar_RegisterVariable( &host_maxfps );
 	Cvar_RegisterVariable( &host_level_streaming );
 	Cvar_Get( "ui_classic", "0", FCVAR_ARCHIVE, "use the original menu style instead of the Continuum menu" );
+	// Continuum menu/game cvars that must survive a restart: register them here,
+	// BEFORE config.cfg is exec'd, so the saved value is preserved. Registering an
+	// FCVAR_ARCHIVE cvar AFTER config exec (e.g. from the menu dll or a game dll)
+	// resets it to the default, which is why these never used to persist.
+	Cvar_Get( "ui_chapters", "0", FCVAR_ARCHIVE, "show the experimental per-game Chapters page" );
+	Cvar_Get( "ui_glyph_style", "auto", FCVAR_ARCHIVE, "button-prompt glyph style (auto/xbox/ps/...)" );
+	Cvar_Get( "flashlight_infinite", "0", FCVAR_ARCHIVE, "flashlight never drains and never auto-shuts-off" );
 	Cvar_RegisterVariable( &fps_override );
 	Cvar_RegisterVariable( &host_framerate );
 	Cvar_RegisterVariable( &host_sleeptime );
