@@ -1619,6 +1619,17 @@ void CL_ClearState( void )
 
 	// wipe the entire cl structure
 	memset( &cl, 0, sizeof( cl ));
+
+	// xash3d-streaming: cls.correction_time lives in client_static_t and so
+	// survives this wipe, but cl.local.lastorigin (the origin the cl_smoothtime
+	// view-correction lerps *from*) was just zeroed above. Normal play keeps
+	// correction_time armed from sub-unit prediction errors, so on a changelevel
+	// the first prediction pass would smooth the view from (0,0,0) toward the new
+	// spawn — an off-map camera that slides through walls to the player (the
+	// transition was a teleport; there's nothing to smooth). Reset it here so the
+	// timer and the origin it lerps from stay consistent across the transition.
+	cls.correction_time = 0;
+
 	MSG_Clear( &cls.netchan.message );
 	memset( &clgame.fade, 0, sizeof( clgame.fade ));
 	memset( &clgame.shake, 0, sizeof( clgame.shake ));
