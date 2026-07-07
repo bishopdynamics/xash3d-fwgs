@@ -969,6 +969,14 @@ void GAME_EXPORT R_BreakModel( const vec3_t pos, const vec3_t size, const vec3_t
 	// limit to 100 pieces
 	if( count > 100 ) count = 100;
 
+	// Continuum: let the player control how long rubble/debris lingers. The
+	// wire "life" byte caps at 25.5s, so we override it client-side here from
+	// cl_debris_life (seconds) to reach the full range. 0 keeps the server value.
+	{
+		float debris_life = Cvar_VariableValue( "cl_debris_life" );
+		if( debris_life > 0.0f ) life = debris_life;
+	}
+
 	for( int i = 0; i < count; i++ )
 	{
 		vec3_t	vecSpot;

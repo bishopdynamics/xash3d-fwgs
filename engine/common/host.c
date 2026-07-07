@@ -1208,6 +1208,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cvar_Get( "ui_chapters", "0", FCVAR_ARCHIVE, "show the experimental per-game Chapters page" );
 	Cvar_Get( "ui_glyph_style", "auto", FCVAR_ARCHIVE, "button-prompt glyph style (auto/xbox/ps/...)" );
 	Cvar_Get( "flashlight_infinite", "0", FCVAR_ARCHIVE, "flashlight never drains and never auto-shuts-off" );
+	Cvar_Get( "cl_debris_life", "10", FCVAR_ARCHIVE, "seconds broken rubble/debris lingers before fading (0 = use server value)" );
 	Cvar_RegisterVariable( &fps_override );
 	Cvar_RegisterVariable( &host_framerate );
 	Cvar_RegisterVariable( &host_sleeptime );
